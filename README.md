@@ -9,9 +9,12 @@ carry a bearer token.
 
 ## Status
 
-Milestones 1–3 of [docs/plan.md](docs/plan.md): the ingest core, the service around it, and the
-web frontend. The phone's sync (milestone 4) is next — for now recordings go in through the API or
-`bmsctl import`.
+Milestones 1–4 of [docs/plan.md](docs/plan.md): the ingest core, the service around it, the web
+frontend, and the Android app's uploader (`hu.telegdy.bms.sync`, in the app repo). Recordings can
+also be loaded straight off disk with `bmsctl import`.
+
+The phone side has been built and unit-tested, and its requests were checked against a live server,
+but it has not yet run on an actual phone.
 
 | | |
 | --- | --- |

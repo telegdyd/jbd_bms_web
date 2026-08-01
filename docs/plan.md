@@ -297,8 +297,10 @@ CSVs can be pulled off the phone and `curl`ed in.
    point.~~ **Done**, including the dashboard, calendar heatmap and splits originally left for
    milestone 5. Leaflet and uPlot are vendored under `bmsweb/static/vendor/`; there is no build
    step and no CDN.
-4. **Android sync.** Settings + manual "Sync now" first (easy to debug), then WorkManager
-   automation once uploads are known-good.
+4. ~~**Android sync.** Settings + manual "Sync now" first (easy to debug), then WorkManager
+   automation once uploads are known-good.~~ **Done** — `hu.telegdy.bms.sync` in the app repo.
+   Built and unit-tested, and the request shape was checked against a live server, but **not yet
+   run on a phone**: there is no device or emulator on the development machine.
 5. **Dashboard polish.** Totals, calendar heatmap, splits, route colouring, editable titles.
 6. **Later, if wanted.** Cross-session pack health (capacity fade, cell-spread drift, Wh/km trend),
    session comparison, GPX/FIT export for pushing rides to Strava proper.
