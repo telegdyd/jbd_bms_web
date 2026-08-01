@@ -13,6 +13,9 @@ Milestones 1–4 of [docs/plan.md](docs/plan.md): the ingest core, the service a
 frontend, and the Android app's uploader (`hu.telegdy.bms.sync`, in the app repo). Recordings can
 also be loaded straight off disk with `bmsctl import`.
 
+Plus GPX import: a ride exported from Strava can be attached to the recording it belongs to, which
+is where heart rate on the ride page comes from. See [below](#heart-rate-from-a-strava-export).
+
 The phone side has been built and unit-tested, and its requests were checked against a live server,
 but it has not yet run on an actual phone.
 
@@ -26,9 +29,12 @@ but it has not yet run on an actual phone.
 | `bmsweb/ingest.py` | Upload → raw file on disk → parsed rows in SQLite. |
 | `bmsweb/db.py` | Schema and migrations. |
 | `bmsweb/splits.py` | Per-kilometre breakdown of a ride. |
-| `bmsweb/api/` | The v1 API: health, sessions, stats. |
+| `bmsweb/gpx.py` | GPX → points. Heart rate out of a Strava export. |
+| `bmsweb/align.py` | Measuring the offset between two devices' clocks. |
+| `bmsweb/companions.py` | Attaching a GPX to a recording, and serving its channels. |
+| `bmsweb/api/` | The v1 API: health, sessions, companions, stats. |
 | `bmsweb/static/` | The frontend: dashboard, lists, ride detail. No build step. |
-| `bmsweb/cli.py` | `summarise`, `import`, `reparse`. |
+| `bmsweb/cli.py` | `summarise`, `import`, `reparse`, `attach`. |
 
 The ports are deliberate, not incidental: the same ride opened on the phone and in the browser must
 not disagree. [docs/csv-format.md](docs/csv-format.md) is the contract between the two halves.
@@ -86,6 +92,10 @@ mapping or the host firewall. If you see a message about uid 10001 instead, it i
 | `GET /api/v1/sessions/{id}/raw.csv` | The original file back, byte for byte. |
 | `PATCH /api/v1/sessions/{id}` | Title and notes. |
 | `DELETE /api/v1/sessions/{id}` | Index row goes, original moves to `data/trash/`. |
+| `POST /api/v1/sessions/{id}/companions` | Attach a GPX. Idempotent on the content hash. |
+| `GET /api/v1/sessions/{id}/companions` | What is attached, with its heart rate figures. |
+| `PATCH /api/v1/sessions/{id}/companions/{cid}` | `offset_ms`, or `realign` to measure it again. |
+| `DELETE /api/v1/sessions/{id}/companions/{cid}` | Detach; the GPX moves to `data/trash/`. |
 | `GET /api/v1/stats` | Totals and per-day buckets for the dashboard. |
 
 Interactive docs at `/docs` while the service is running.
@@ -95,6 +105,28 @@ Interactive docs at `/docs` while the service is running.
 ```bash
 BMS_DATA_DIR=./data python -m bmsweb.cli import /path/to/logs/
 ```
+
+### Heart rate, from a Strava export
+
+The pack knows everything about itself and nothing about the rider. Open the ride on Strava, choose
+**⋯ → Export GPX**, and attach the file to the session — in the browser, at the bottom of the ride
+page, or from the command line:
+
+```bash
+BMS_DATA_DIR=./data python -m bmsweb.cli attach 42 evening_loop.gpx
+```
+
+Heart rate and cadence then appear as two more charts on the same shared cursor, and as two more
+summary tiles. The GPX is kept whole next to the CSVs, and the rows in the database are derived
+from it, so an attached file survives a `reparse` exactly as a title does.
+
+The two files come from two clocks. Rather than trust them to agree, the server matches the ride's
+own speed against the speed implied by the GPX's points and reports the shift it found, along with
+the correlation it achieved — visible on the page, and overridable by hand if the match looks
+wrong. A recording too short or too stationary to match on is attached unshifted and says so.
+
+Note **Export GPX**, not **Export Original**: the original is a FIT file, which this does not read.
+And a GPX only carries a heart rate if the activity was recorded with one.
 
 ### After changing how a figure is computed
 

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx creator="StravaGPX" version="1.1"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
+ <metadata>
+  <time>2026-08-01T08:00:00Z</time>
+ </metadata>
+ <trk>
+  <name>Morning Ride</name>
+  <type>17</type>
+  <trkseg>
+   <trkpt lat="47.5000000" lon="19.0000000">
+    <ele>120.0</ele>
+    <time>2026-08-01T08:00:00Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>102</gpxtpx:hr><gpxtpx:cad>64</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+   <trkpt lat="47.5001000" lon="19.0000000">
+    <ele>120.4</ele>
+    <time>2026-08-01T08:00:01Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>104</gpxtpx:hr><gpxtpx:cad>65</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+   <trkpt lat="47.5002000" lon="19.0000000">
+    <ele>120.8</ele>
+    <time>2026-08-01T08:00:02Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>107</gpxtpx:hr><gpxtpx:cad>66</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+   <trkpt lat="47.5010000" lon="19.0000000">
+    <ele>124.0</ele>
+    <time>2026-08-01T08:00:30Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>151</gpxtpx:hr><gpxtpx:cad>78</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+   <trkpt lat="47.5011000" lon="19.0000000">
+    <ele>124.4</ele>
+    <time>2026-08-01T08:00:31Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>153</gpxtpx:hr><gpxtpx:cad>79</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+   <trkpt lat="47.5012000" lon="19.0000000">
+    <ele>124.8</ele>
+    <time>2026-08-01T08:00:32Z</time>
+    <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>155</gpxtpx:hr></gpxtpx:TrackPointExtension></extensions>
+   </trkpt>
+  </trkseg>
+ </trk>
+</gpx>

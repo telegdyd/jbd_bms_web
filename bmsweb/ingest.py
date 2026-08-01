@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
-from . import SCHEMA_VERSION, polyline
+from . import SCHEMA_VERSION, companions, polyline
 from .config import Settings
 from .db import transaction
 from .parse import BmsSample, Ekd01Sample, ParsedSession, SessionKind, parse_csv
@@ -101,6 +101,11 @@ def reparse(connection: sqlite3.Connection, settings: Settings, session_id: int)
     session = parse_csv(path.read_text(encoding="utf-8", errors="replace"))
     started_at_ms, tz_offset_min = _start_of(session, row["source_name"])
 
+    # Deleting the session row cascades to its companions, so they are rebuilt from their own
+    # stored GPX files in the same transaction — an attached heart rate must survive a reparse
+    # exactly as a title does.
+    attached = companions.snapshot(connection, session_id)
+
     with transaction(connection):
         connection.execute("DELETE FROM samples WHERE session_id = ?", (session_id,))
         connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
@@ -117,6 +122,7 @@ def reparse(connection: sqlite3.Connection, settings: Settings, session_id: int)
             title=row["title"],
             notes=row["notes"],
         )
+        companions.restore(connection, settings, session_id, attached)
     return True
 
 
@@ -137,6 +143,10 @@ def delete(connection: sqlite3.Connection, settings: Settings, session_id: int) 
         if target.exists():
             target = settings.trash_dir / f"{int(time.time())}_{path.name}"
         path.rename(target)
+
+    # The companion rows go with the session on their own — they cascade — but a cascade cannot
+    # move a file, and an orphaned GPX would sit in the data directory for ever.
+    companions.trash_files_for(connection, settings, session_id)
 
     with transaction(connection):
         connection.execute("DELETE FROM samples WHERE session_id = ?", (session_id,))

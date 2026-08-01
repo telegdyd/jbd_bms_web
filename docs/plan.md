@@ -81,6 +81,9 @@ bms-web/
     geo.py             ✓ haversine + local-metre projection (port of Geo)
     simplify.py        ✓ accuracy filter → min separation → Douglas-Peucker (port of RouteSimplifier)
     polyline.py        ✓ encoded polyline for the map
+    gpx.py             GPX → points, for heart rate out of a Strava export
+    align.py           the offset between two recording devices' clocks
+    companions.py      attaching a GPX to a session, and serving its channels
     cli.py             ✓ bmsctl summarise, for parity-checking real recordings
     api/               sessions.py, stats.py, health.py
     static/            index.html, app.js, style.css, vendored leaflet + uplot
@@ -152,6 +155,47 @@ Volume: a 1 Hz ride of two hours is ~7 k rows. A multi-day solar session is ~86 
 still nothing for SQLite, but it is why the series endpoint downsamples rather than returning
 everything.
 
+### 2.2.1 Companion files
+
+The pack log knows everything about the bike and nothing about the rider. A GPX exported from
+Strava — the same ride, recorded by a watch or a phone — carries heart rate and cadence, and
+attaching one to a session puts them beside the power trace. The recording stays the source of
+every figure; a companion contributes channels only, and never a distance or a watt-hour.
+
+```sql
+CREATE TABLE companions (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sha256 TEXT NOT NULL, raw_path TEXT NOT NULL, source_name TEXT NOT NULL,
+  name TEXT, creator TEXT,                  -- '<trk><name>' and the exporter
+  started_at_ms INTEGER, ended_at_ms INTEGER,
+  point_count INTEGER, hr_count INTEGER, cadence_count INTEGER,
+  offset_ms INTEGER NOT NULL DEFAULT 0,     -- added to every companion timestamp
+  offset_source TEXT, correlation REAL, overlap_s INTEGER,
+  UNIQUE (session_id, sha256)
+);
+CREATE TABLE companion_samples (
+  companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+  t_ms INTEGER NOT NULL, hr INTEGER, cadence INTEGER, lat REAL, lon REAL, alt_m REAL,
+  PRIMARY KEY (companion_id, t_ms)
+) WITHOUT ROWID;
+```
+
+Two decisions carry the weight here.
+
+**Not columns on `samples`.** A reparse rebuilds every sample row from the CSV, so a heart rate
+stored among them would be destroyed by the next change to the summary rules — the one thing this
+storage design exists to prevent. Kept in its own table beside its own original, it is instead
+*re-derived* on reparse, and picks up any improvement to how a GPX is read.
+
+**The offset is measured, not assumed.** Section 5 says clock skew is irrelevant by design, and it
+was, while every timestamp came from one device. A watch is a second clock. So the ride's own speed
+is cross-correlated against the speed implied by the GPX's point spacing, and the best-fitting shift
+is stored along with the correlation that justifies it — coarse-to-fine, pure Python, ±5 minutes.
+The page shows the number rather than hiding it, because silently moving someone's heart rate by
+twenty seconds is worse than not moving it at all. A hand-set offset is marked `manual` and is never
+overruled by a later reparse.
+
 ### 2.3 API
 
 All under `/api/v1`, all authenticated with `Authorization: Bearer <token>` except `/health`.
@@ -167,7 +211,17 @@ All under `/api/v1`, all authenticated with `Authorization: Bearer <token>` exce
 | `GET` | `/sessions/{id}/raw.csv` | The original file back. |
 | `PATCH` | `/sessions/{id}` | `title`, `notes`, `tags`. |
 | `DELETE` | `/sessions/{id}` | Removes index rows; raw file moved to `/data/trash/` rather than unlinked. |
+| `POST` | `/sessions/{id}/companions` | Multipart GPX upload, idempotent on the hash. Optional `offset_ms` skips the matching. |
+| `GET` | `/sessions/{id}/companions` | What is attached, with heart rate figures over the overlapping part. |
+| `PATCH` | `/sessions/{id}/companions/{cid}` | `offset_ms` to set the shift, `realign` to measure it again. |
+| `DELETE` | `/sessions/{id}/companions/{cid}` | Detach; the GPX moves to `/data/trash/`. |
 | `GET` | `/stats` | `?period=week\|month\|year\|all` — totals, streaks, per-day buckets. |
+
+`hr` and `cadence` are requestable from `/series` alongside the recording's own columns, but come
+from an attached companion rather than from `samples`: they are resampled onto the same instants
+the endpoint has already chosen, offset applied, nearest value within a tolerance and `null`
+outside it — so the stretch before the watch was started reads as absent rather than as a flat
+line.
 
 Upload semantics that make retries safe:
 
@@ -205,6 +259,8 @@ Pages:
     **one cursor**, exactly as `LogDetailScreen`'s single scrubber does — hovering a chart moves a
     marker along the map and reads every other chart at that moment
   - Splits table (per kilometre: time, avg speed, Wh, ascent)
+  - Heart rate and cadence from an attached GPX, on the same cursor as everything else, with the
+    measured clock offset shown and correctable
   - Editable title and notes; download the original CSV
 - **Sessions** — non-geo recordings (solar, bench). Same charts, no map.
 - **Compare** *(later)* — two sessions overlaid on elapsed time, which is how a pack change or a
@@ -303,7 +359,11 @@ CSVs can be pulled off the phone and `curl`ed in.
    run on a phone**: there is no device or emulator on the development machine.
 5. **Dashboard polish.** Totals, calendar heatmap, splits, route colouring, editable titles.
 6. **Later, if wanted.** Cross-session pack health (capacity fade, cell-spread drift, Wh/km trend),
-   session comparison, GPX/FIT export for pushing rides to Strava proper.
+   session comparison, GPX/FIT *export* for pushing rides to Strava proper.
+7. ~~**Companion files.** GPX import: heart rate and cadence from a Strava export, lined up with
+   the recording by measuring the offset between the two devices' clocks.~~ **Done** — §2.2.1,
+   `gpx.py`, `align.py`, `companions.py`, and the heart rate section on the ride page. Verified
+   against generated pairs with a known skew; not yet run against a real Strava export.
 
 ## 5. Known risks
 
@@ -315,4 +375,10 @@ CSVs can be pulled off the phone and `curl`ed in.
 - **Distance depends on GPS quality**, so the same route can differ by a few percent between rides.
   Worth remembering before reading trends into Wh/km.
 - **Clock skew** between phone and server is irrelevant by design — every timestamp comes from the
-  file, never from the server's own clock.
+  file, never from the server's own clock. It stops being irrelevant the moment a *second recording
+  device* is involved: a companion GPX comes from a watch with a clock of its own, which is why
+  §2.2.1 measures the difference instead of trusting it.
+- **A companion match can be wrong.** Cross-correlating two speed curves needs movement with shape
+  in it; a steady half-hour on a flat road, or a ride mostly spent stationary, gives a weak peak
+  that is chosen anyway. Hence storing the correlation and showing it, rather than presenting a
+  measured offset and a guessed one identically.

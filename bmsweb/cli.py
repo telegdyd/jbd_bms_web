@@ -14,8 +14,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import SCHEMA_VERSION, db
+from . import SCHEMA_VERSION, companions, db
 from .config import load_settings
+from .gpx import GpxError
 from .ingest import ingest, reparse
 from .parse import SessionKind, parse_csv
 from .simplify import simplify
@@ -42,6 +43,18 @@ def main(argv: list[str] | None = None) -> int:
         "--all", action="store_true", help="rebuild every session, not just stale ones"
     )
 
+    attach_cmd = sub.add_parser(
+        "attach", help="attach a GPX exported from Strava to a session, for its heart rate"
+    )
+    attach_cmd.add_argument("session_id", type=int)
+    attach_cmd.add_argument("path", type=Path)
+    attach_cmd.add_argument(
+        "--offset-s",
+        type=float,
+        default=None,
+        help="set the offset by hand instead of measuring it against the recording",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "summarise":
@@ -57,6 +70,54 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "reparse":
         return _reparse(args.ids, args.all)
 
+    if args.command == "attach":
+        return _attach(args.session_id, args.path, args.offset_s)
+
+    return 0
+
+
+def _attach(session_id: int, path: Path, offset_s: float | None) -> int:
+    settings = load_settings()
+    settings.prepare()
+    connection = db.connect(settings.database_path)
+
+    if connection.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
+        print(f"No session {session_id}.")
+        return 1
+
+    try:
+        result = companions.attach(
+            connection,
+            settings,
+            session_id,
+            path.name,
+            path.read_bytes(),
+            offset_ms=None if offset_s is None else round(offset_s * 1000),
+        )
+    except GpxError as error:
+        print(f"{path.name}: {error}")
+        return 1
+
+    row = next(
+        companion
+        for companion in companions.list_for(connection, session_id)
+        if companion["id"] == result.companion_id
+    )
+
+    print(f"{result.status.value:9} {path.name} → session {session_id}, companion {row['id']}")
+    print(f"  points        {row['point_count']} ({row['hr_count']} with heart rate)")
+    print(f"  offset        {row['offset_ms'] / 1000:+.0f} s ({row['offset_source']})")
+    if row["correlation"] is not None:
+        print(f"  correlation   {row['correlation']:.3f} over {_duration(row['overlap_s'])}")
+    if row["hr_in_session"]:
+        print(
+            f"  heart rate    {row['hr_min']}–{row['hr_max']} bpm, {row['hr_avg']:.0f} average"
+            f" over {_duration(row['covered_s'])} of the ride"
+        )
+    else:
+        print("  heart rate    nothing overlapping this session — check the offset")
+
+    connection.close()
     return 0
 
 

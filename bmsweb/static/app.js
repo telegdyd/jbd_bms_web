@@ -44,6 +44,18 @@ async function patch(path, body) {
   return response.json();
 }
 
+/* Uploads report their own failures in the body — "no timestamped track points in that file" is
+ * the whole point of the message, and a bare status code would waste it. */
+async function send(method, path, body) {
+  const response = await fetch(API + path, { method, body });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try { detail = (await response.json()).detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
 const fmt = {
   duration(seconds) {
     seconds = Math.round(seconds || 0);
@@ -302,6 +314,10 @@ async function dashboardView(root) {
 const CHANNELS = [
   { field: 'watts', name: 'Power', unit: 'W', colour: '--power', digits: 0, fill: true },
   { field: 'speed_kmh', name: 'Speed', unit: 'km/h', colour: '--speed', digits: 1 },
+  /* From an attached GPX rather than from the recording. Asked for unconditionally: the server
+   * answers with nulls when nothing is attached, and a chart of nulls is not drawn. */
+  { field: 'hr', name: 'Heart rate', unit: 'bpm', colour: '--hr', digits: 0, companion: true },
+  { field: 'cadence', name: 'Cadence', unit: 'rpm', colour: '--cadence', digits: 0, companion: true },
   { field: 'volts', name: 'Voltage', unit: 'V', colour: '--volts', digits: 2 },
   { field: 'soc', name: 'State of charge', unit: '%', colour: '--soc', digits: 0 },
   { field: 'alt_m', name: 'Altitude', unit: 'm', colour: '--alt', digits: 0 },
@@ -339,10 +355,11 @@ async function detailView(root, id) {
            session.device_label,
            `${session.sample_count} samples`].filter(Boolean).join(' · '), ' ', saved)),
       el('div', { class: 'controls' },
-        el('a', { class: 'pill', href: `${API}/sessions/${id}/raw.csv` },
+        el('a', { href: `${API}/sessions/${id}/raw.csv` },
           el('button', { class: 'pill', type: 'button' }, 'Download CSV')))));
 
-  root.append(summaryTiles(session, isEkd01));
+  const tiles = summaryTiles(session, isEkd01);
+  root.append(tiles);
 
   if (session.gap_count) {
     root.append(el('p', { class: 'sub' },
@@ -359,6 +376,9 @@ async function detailView(root, id) {
   const splitHost = el('div', {});
   if (session.has_location) root.append(el('h2', {}, 'Splits'), splitHost);
 
+  const companionHost = el('div', {});
+  root.append(el('h2', {}, 'Heart rate'), companionHost);
+
   const notes = el('textarea', { class: 'notes', placeholder: 'Notes about this ride…' });
   notes.value = session.notes || '';
   notes.addEventListener('blur', async () => {
@@ -368,16 +388,20 @@ async function detailView(root, id) {
   });
   root.append(el('h2', {}, 'Notes'), el('div', { class: 'card' }, notes));
 
-  const wanted = CHANNELS.filter((c) => (isEkd01 ? ['speed_kmh', 'soc'].includes(c.field) : true));
-  const [track, series, splitBody] = await Promise.all([
+  const wanted = CHANNELS.filter(
+    (c) => (isEkd01 ? ['speed_kmh', 'soc'].includes(c.field) : true) || c.companion);
+  const [track, series, splitBody, companions] = await Promise.all([
     session.has_location ? get(`/sessions/${id}/track`) : Promise.resolve(null),
     get(`/sessions/${id}/series?fields=${wanted.map((c) => c.field).join(',')}&points=3000`),
     session.has_location ? get(`/sessions/${id}/splits`) : Promise.resolve(null),
+    get(`/sessions/${id}/companions`),
   ]);
 
   const marker = mapHost ? drawMap(track) : null;
   drawCharts(chartHost, series, wanted, track, marker);
   if (splitBody) drawSplits(splitHost, splitBody);
+  drawCompanions(companionHost, id, companions.companions);
+  tiles.append(...heartRateTiles(companions.companions));
 }
 
 function summaryTiles(session, isEkd01) {
@@ -645,6 +669,138 @@ function drawSplits(host, body) {
             ? (split.discharged_wh / split.distance_km).toFixed(1) : '—'),
           el('td', {}, fmt.metres(split.altitude_change_m)));
       })))));
+}
+
+/* ------------------------------------------------------------ companions */
+
+function heartRateTiles(companions) {
+  const measured = companions.filter((c) => c.hr_in_session > 0);
+  if (!measured.length) return [];
+
+  // If two files are attached, the figures come from whichever actually covers the ride.
+  const best = measured.reduce((a, b) => (b.hr_in_session > a.hr_in_session ? b : a));
+  return [
+    tile('Avg HR', Math.round(best.hr_avg), 'bpm'),
+    tile('Max HR', best.hr_max, 'bpm'),
+  ];
+}
+
+function drawCompanions(host, sessionId, companions) {
+  host.replaceChildren(
+    ...companions.map((companion) => companionCard(sessionId, companion)),
+    attachForm(sessionId, companions.length));
+}
+
+function companionCard(sessionId, companion) {
+  const status = el('span', { class: 'saving' });
+  const offset = el('input', {
+    type: 'number', step: '1', class: 'offset',
+    value: String(Math.round(companion.offset_ms / 1000)),
+  });
+
+  async function apply(body) {
+    status.textContent = 'saving…';
+    try {
+      await patch(`/sessions/${sessionId}/companions/${companion.id}`, body);
+      // A changed offset moves every reading on the page, so the whole view is rebuilt rather
+      // than this card alone.
+      route();
+    } catch (error) {
+      status.textContent = String(error.message || error);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm('Remove this file from the ride? The original goes to the trash directory.')) return;
+    status.textContent = 'removing…';
+    try {
+      await send('DELETE', `/sessions/${sessionId}/companions/${companion.id}`);
+      route();
+    } catch (error) {
+      status.textContent = String(error.message || error);
+    }
+  }
+
+  const facts = [
+    `${companion.point_count} points`,
+    companion.hr_count ? `${companion.hr_count} with heart rate` : 'no heart rate in this file',
+    companion.covered_s ? `covers ${fmt.duration(companion.covered_s)} of the ride` : 'no overlap with the ride',
+  ];
+  if (companion.hr_in_session) {
+    facts.push(`avg ${Math.round(companion.hr_avg)} · max ${companion.hr_max} bpm`);
+  }
+
+  return el('div', { class: 'card companion' + (weakMatch(companion) ? ' warn' : '') },
+    el('div', { class: 'title' },
+      companion.name || companion.source_name,
+      companion.creator ? el('span', { class: 'badge' }, companion.creator) : null),
+    el('div', { class: 'meta' }, facts.join(' · ')),
+    el('p', { class: 'sub' }, alignmentNote(companion)),
+    el('div', { class: 'controls' },
+      el('label', { class: 'offset-label' }, 'Offset ', offset, ' s'),
+      el('button', {
+        class: 'pill', type: 'button',
+        onclick: () => apply({ offset_ms: Math.round(Number(offset.value) * 1000) }),
+      }, 'Apply'),
+      el('button', { class: 'pill', type: 'button', onclick: () => apply({ realign: true }) }, 'Re-align'),
+      el('a', { class: 'pill', href: `${API}/sessions/${sessionId}/companions/${companion.id}/raw.gpx` }, 'Download GPX'),
+      el('button', { class: 'pill', type: 'button', onclick: remove }, 'Remove'),
+      status));
+}
+
+function weakMatch(companion) {
+  return companion.offset_source === 'correlation' && companion.correlation < 0.5;
+}
+
+/* The offset is a measurement, so the page says how good a measurement it was. Silently shifting
+ * someone's heart rate by twenty seconds and saying nothing about it would be worse than useless. */
+function alignmentNote(companion) {
+  const seconds = Math.round(companion.offset_ms / 1000);
+  const shift = seconds === 0
+    ? 'no shift'
+    : `shifted ${Math.abs(seconds)} s ${seconds > 0 ? 'later' : 'earlier'}`;
+
+  if (companion.offset_source === 'manual') return `Offset set by hand — ${shift}.`;
+  if (companion.offset_source === 'correlation') {
+    const quality = weakMatch(companion)
+      ? ' The two speed traces barely agree, so check this before trusting it.'
+      : '';
+    return `Matched against the ride's own speed over ${fmt.duration(companion.overlap_s)}: ` +
+      `${shift}, correlation ${companion.correlation.toFixed(2)}.${quality}`;
+  }
+  return 'Not matched — there was too little overlapping movement to compare the two. ' +
+    'The file\'s own timestamps are used as they are.';
+}
+
+function attachForm(sessionId, existing) {
+  const input = el('input', { type: 'file', accept: '.gpx,application/gpx+xml' });
+  const status = el('span', { class: 'saving' });
+
+  async function upload() {
+    const file = input.files && input.files[0];
+    if (!file) { status.textContent = 'Choose a file first.'; return; }
+
+    const form = new FormData();
+    form.append('file', file);
+    status.textContent = 'uploading…';
+    try {
+      await send('POST', `/sessions/${sessionId}/companions`, form);
+      route();
+    } catch (error) {
+      status.textContent = String(error.message || error);
+    }
+  }
+
+  return el('div', { class: 'card' },
+    el('p', { class: 'sub' }, existing
+      ? 'Attach another file — one Strava activity can cover two recordings.'
+      : 'The pack knows nothing about the rider. Open the ride on Strava, choose ⋯ → Export GPX, ' +
+        'and attach the file here to put heart rate on these charts. The two clocks are lined up ' +
+        'automatically.'),
+    el('div', { class: 'controls' },
+      input,
+      el('button', { class: 'pill', type: 'button', onclick: upload }, 'Attach'),
+      status));
 }
 
 /* ---------------------------------------------------------------- router */

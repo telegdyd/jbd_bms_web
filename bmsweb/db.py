@@ -81,6 +81,50 @@ SCHEMA = [
         PRIMARY KEY (session_id, t_ms)
     ) WITHOUT ROWID;
     """,
+    # 2 — companion files: a GPX exported from Strava, carrying the channels the pack cannot see.
+    #
+    # Deliberately not columns on `samples`. A reparse rebuilds every sample row from the CSV, and
+    # a heart rate stored there would be wiped by the next change to the summary rules — which is
+    # the one thing this project's storage design exists to prevent. Kept apart, on its own
+    # timeline, it survives, and the offset that lines the two clocks up stays editable.
+    """
+    CREATE TABLE companions (
+        id             INTEGER PRIMARY KEY,
+        session_id     INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        sha256         TEXT    NOT NULL,
+        source         TEXT    NOT NULL DEFAULT 'gpx',
+        source_name    TEXT    NOT NULL,
+        raw_path       TEXT    NOT NULL,
+        name           TEXT,
+        creator        TEXT,
+        started_at_ms  INTEGER NOT NULL,
+        ended_at_ms    INTEGER NOT NULL,
+        point_count    INTEGER NOT NULL DEFAULT 0,
+        hr_count       INTEGER NOT NULL DEFAULT 0,
+        cadence_count  INTEGER NOT NULL DEFAULT 0,
+
+        -- Added to every companion timestamp to put it on the recording's timeline.
+        offset_ms      INTEGER NOT NULL DEFAULT 0,
+        offset_source  TEXT    NOT NULL DEFAULT 'none',   -- 'correlation' | 'manual' | 'none'
+        correlation    REAL,
+        overlap_s      INTEGER,
+
+        attached_at_ms INTEGER NOT NULL,
+
+        -- The same export may legitimately cover two recordings — one Strava activity across a
+        -- battery swap — so the hash is unique per session rather than globally.
+        UNIQUE (session_id, sha256)
+    );
+
+    CREATE TABLE companion_samples (
+        companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+        t_ms         INTEGER NOT NULL,
+        hr           INTEGER,
+        cadence      INTEGER,
+        lat          REAL, lon REAL, alt_m REAL,
+        PRIMARY KEY (companion_id, t_ms)
+    ) WITHOUT ROWID;
+    """,
 ]
 
 

@@ -10,8 +10,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from .. import companions
+from ..companions import AttachStatus
 from ..config import Settings
 from ..db import transaction
+from ..gpx import GpxError
 from ..ingest import IngestStatus, ingest, delete as delete_session, sha256_of
 from ..parse import BmsSample
 from ..simplify import located, simplify
@@ -26,6 +29,10 @@ SERIES_FIELDS = {
     "delta_mv", "min_cell_mv", "max_cell_mv",
     "speed_kmh", "alt_m",
 }
+
+#: Chartable alongside them, but they come from an attached companion file rather than from the
+#: recording, so they are resolved separately and on their own clock.
+CHARTABLE = SERIES_FIELDS | set(companions.CHANNELS)
 
 #: What a session row returns in a list. Samples and polyline are not in it — a list of a hundred
 #: rides should be one small response.
@@ -175,6 +182,145 @@ def raw_csv(
     return FileResponse(path, media_type="text/csv", filename=row["source_name"])
 
 
+# ---------------------------------------------------------------------- companions
+#
+# A GPX exported from Strava, attached to a recording for the channels the pack cannot see. The
+# upload is deliberately shaped like the recording upload — multipart, hash-idempotent — because it
+# is the same act by a different route: a file arrives, its original is kept, and what the database
+# holds is derived from it.
+
+
+class CompanionPatch(BaseModel):
+    #: Milliseconds added to the companion's timestamps. Anything beyond an hour is not two clocks
+    #: disagreeing, it is the wrong file.
+    offset_ms: int | None = Field(default=None, ge=-3_600_000, le=3_600_000)
+    #: Measure the offset again instead of setting one.
+    realign: bool = False
+
+
+@router.post(
+    "/{session_id}/companions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deps.require_token)],
+)
+async def attach_companion(
+    session_id: int,
+    file: UploadFile = File(...),
+    offset_ms: int | None = Form(default=None),
+    connection: sqlite3.Connection = Depends(deps.connection),
+    settings: Settings = Depends(deps.settings),
+) -> Response:
+    _require(connection, session_id)
+    content = await file.read()
+
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty upload")
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "That file is too large")
+
+    try:
+        result = companions.attach(
+            connection, settings, session_id, file.filename or "companion.gpx", content, offset_ms
+        )
+    except GpxError as error:
+        # Everything GpxError says is about the file the user just picked, so it is worth showing
+        # them rather than flattening into "bad request".
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
+
+    body = {
+        "status": result.status.value,
+        "companion": _companion(connection, session_id, result.companion_id),
+    }
+    code = (
+        status.HTTP_201_CREATED
+        if result.status is AttachStatus.CREATED
+        else status.HTTP_200_OK
+    )
+    return Response(json.dumps(body), status_code=code, media_type="application/json")
+
+
+@router.get("/{session_id}/companions")
+def companion_list(
+    session_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+) -> dict:
+    _require(connection, session_id)
+    return {"id": session_id, "companions": companions.list_for(connection, session_id)}
+
+
+@router.patch(
+    "/{session_id}/companions/{companion_id}", dependencies=[Depends(deps.require_token)]
+)
+def patch_companion(
+    session_id: int,
+    companion_id: int,
+    patch: CompanionPatch,
+    connection: sqlite3.Connection = Depends(deps.connection),
+) -> dict:
+    _require_companion(connection, session_id, companion_id)
+
+    if patch.realign:
+        companions.realign(connection, companion_id)
+    elif patch.offset_ms is not None:
+        companions.set_offset(connection, companion_id, patch.offset_ms)
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Give an offset_ms, or ask to realign")
+
+    return _companion(connection, session_id, companion_id)
+
+
+@router.delete(
+    "/{session_id}/companions/{companion_id}", dependencies=[Depends(deps.require_token)]
+)
+def detach_companion(
+    session_id: int,
+    companion_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    settings: Settings = Depends(deps.settings),
+) -> dict:
+    _require_companion(connection, session_id, companion_id)
+    companions.detach(connection, settings, companion_id)
+    # The GPX is in the trash directory, not gone.
+    return {"status": "detached", "id": companion_id}
+
+
+@router.get("/{session_id}/companions/{companion_id}/raw.gpx")
+def companion_raw(
+    session_id: int,
+    companion_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    settings: Settings = Depends(deps.settings),
+) -> FileResponse:
+    row = _require_companion(connection, session_id, companion_id)
+
+    path = Path(row["raw_path"])
+    if not path.is_absolute():
+        path = settings.data_dir / path
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "The original file is no longer on disk")
+
+    return FileResponse(path, media_type="application/gpx+xml", filename=row["source_name"])
+
+
+def _require_companion(
+    connection: sqlite3.Connection, session_id: int, companion_id: int
+) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM companions WHERE id = ? AND session_id = ?", (companion_id, session_id)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such companion on this session")
+    return row
+
+
+def _companion(connection: sqlite3.Connection, session_id: int, companion_id: int) -> dict:
+    """One companion, with the same overlap figures the list gives."""
+    for companion in companions.list_for(connection, session_id):
+        if companion["id"] == companion_id:
+            return companion
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "No such companion on this session")
+
+
 @router.get("/{session_id}/track")
 def track(
     session_id: int,
@@ -287,15 +433,18 @@ def series(
     """
     row = _require(connection, session_id)
     requested = [f.strip() for f in fields.split(",") if f.strip()]
-    unknown = [f for f in requested if f not in SERIES_FIELDS]
+    unknown = [f for f in requested if f not in CHARTABLE]
     if unknown:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown field(s): {', '.join(unknown)}")
     if not requested:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No fields requested")
 
-    columns = ", ".join(requested)
+    own = [f for f in requested if f in SERIES_FIELDS]
+    attached = [f for f in requested if f in companions.CHANNELS]
+
+    columns = "".join(f", {name}" for name in own)
     rows = connection.execute(
-        f"SELECT t_ms, {columns} FROM samples WHERE session_id = ? ORDER BY t_ms",
+        f"SELECT t_ms{columns} FROM samples WHERE session_id = ? ORDER BY t_ms",
         (session_id,),
     ).fetchall()
 
@@ -305,20 +454,20 @@ def series(
     gaps = _gaps([r["t_ms"] for r in rows], row["gap_threshold_ms"])
 
     if len(rows) <= points:
-        return {
-            "id": session_id,
+        body = {
             "t": [r["t_ms"] for r in rows],
-            "fields": {f: [r[f] for r in rows] for f in requested},
-            "gaps": gaps,
+            "fields": {f: [r[f] for r in rows] for f in own},
             "downsampled": False,
         }
+    else:
+        body = {**_bucket(rows, own, points // 2), "downsampled": True}
 
-    return {
-        "id": session_id,
-        **_bucket(rows, requested, points // 2),
-        "gaps": gaps,
-        "downsampled": True,
-    }
+    # Sampled at the instants already chosen for the recording's own columns — including the
+    # synthetic ones bucketing emits — so a heart rate is read at the same moment as the watts
+    # beside it.
+    body["fields"].update(companions.channels(connection, session_id, body["t"], attached))
+
+    return {"id": session_id, **body, "gaps": gaps}
 
 
 def _bucket(rows: list[sqlite3.Row], fields: list[str], bucket_count: int) -> dict:

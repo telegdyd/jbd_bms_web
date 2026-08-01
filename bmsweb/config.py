@@ -34,6 +34,11 @@ class Settings:
         return self.data_dir / "raw"
 
     @property
+    def companions_dir(self) -> Path:
+        """Uploaded GPX files. Kept whole for the same reason the CSVs are: the index is derived."""
+        return self.data_dir / "companions"
+
+    @property
     def trash_dir(self) -> Path:
         """Deleted recordings land here rather than being unlinked. Disk is cheap; rides are not."""
         return self.data_dir / "trash"
@@ -56,7 +61,7 @@ class Settings:
         symptom — a container that restarts for ever while the stack claims to be deployed — says
         nothing at all about the cause.
         """
-        for directory in (self.data_dir, self.raw_dir, self.trash_dir):
+        for directory in (self.data_dir, self.raw_dir, self.companions_dir, self.trash_dir):
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except OSError as error:

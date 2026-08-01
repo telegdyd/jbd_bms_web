@@ -14,6 +14,9 @@
   --soc: #b98cff;
   --alt: #a2836e;
   --spread: #ff7a7a;
+  /* Companion channels, from an attached GPX rather than from the pack. */
+  --hr: #ff6b8b;
+  --cadence: #4fd1c5;
 
   --radius: 12px;
   --gap: 16px;
@@ -33,6 +36,8 @@
   --soc: #7c3aed;
   --alt: #7a5c46;
   --spread: #dc2626;
+  --hr: #db2777;
+  --cadence: #0d9488;
 }
 
 * { box-sizing: border-box; }
@@ -192,6 +197,37 @@ tbody tr:last-child td { border-bottom: none; }
 .heat i[data-level="2"] { background: color-mix(in srgb, var(--accent) 55%, var(--surface-2)); }
 .heat i[data-level="3"] { background: color-mix(in srgb, var(--accent) 78%, var(--surface-2)); }
 .heat i[data-level="4"] { background: var(--accent); }
+
+/* Companion files (a GPX from Strava) */
+.companion { margin-bottom: 12px; }
+.companion .title { font-weight: 600; }
+.companion .meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.companion .sub { margin: 10px 0 12px; }
+.companion .controls { margin-bottom: 0; }
+/* The measurement is not always convincing, and a card that looks the same either way would be
+   inviting someone to trust a heart rate lined up against the wrong minute. */
+.companion.warn { border-color: var(--power); }
+.companion.warn .sub { color: var(--power); }
+
+.offset-label { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+input.offset { width: 72px; font-variant-numeric: tabular-nums; text-align: right; }
+input[type="number"], input[type="file"] {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  max-width: 100%;
+}
+a.pill {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text);
+  background: var(--surface);
+}
+a.pill:hover { background: var(--surface-2); text-decoration: none; }
 
 .notes { width: 100%; min-height: 74px; resize: vertical; }
 .detail-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; justify-content: space-between; }
