@@ -293,7 +293,10 @@ CSVs can be pulled off the phone and `curl`ed in.
 2. ~~**Server + API + container.** Upload, storage, reparse CLI, read endpoints, health. Verify by
    uploading a month of existing recordings by hand.~~ **Done**, plus `bmsctl import` for loading
    recordings straight off disk. Verification against a real month is still outstanding.
-3. **Frontend v1.** List and detail pages: summary tiles, map, linked charts. Usable at this point.
+3. ~~**Frontend v1.** List and detail pages: summary tiles, map, linked charts. Usable at this
+   point.~~ **Done**, including the dashboard, calendar heatmap and splits originally left for
+   milestone 5. Leaflet and uPlot are vendored under `bmsweb/static/vendor/`; there is no build
+   step and no CDN.
 4. **Android sync.** Settings + manual "Sync now" first (easy to debug), then WorkManager
    automation once uploads are known-good.
 5. **Dashboard polish.** Totals, calendar heatmap, splits, route colouring, editable titles.

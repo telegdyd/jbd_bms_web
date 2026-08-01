@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rides</title>
+  <link rel="stylesheet" href="/vendor/leaflet.css">
+  <link rel="stylesheet" href="/vendor/uPlot.min.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <nav>
+      <a href="#/" data-route="/">Dashboard</a>
+      <a href="#/rides" data-route="/rides">Rides</a>
+      <a href="#/sessions" data-route="/sessions">Sessions</a>
+    </nav>
+    <button id="theme" type="button" title="Light or dark">◐</button>
+  </header>
+
+  <main id="app" aria-live="polite"></main>
+
+  <script src="/vendor/leaflet.js"></script>
+  <script src="/vendor/uPlot.iife.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

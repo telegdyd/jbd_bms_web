@@ -9,9 +9,9 @@ carry a bearer token.
 
 ## Status
 
-Milestones 1 and 2 of [docs/plan.md](docs/plan.md): the ingest core, and the service around it.
-The API is complete and the container runs. The frontend (milestone 3) and the phone's sync
-(milestone 4) are next — for now recordings go in through the API or `bmsctl import`.
+Milestones 1–3 of [docs/plan.md](docs/plan.md): the ingest core, the service around it, and the
+web frontend. The phone's sync (milestone 4) is next — for now recordings go in through the API or
+`bmsctl import`.
 
 | | |
 | --- | --- |
@@ -22,7 +22,9 @@ The API is complete and the container runs. The frontend (milestone 3) and the p
 | `bmsweb/polyline.py` | Encoded polyline, so a list of rides is one request. |
 | `bmsweb/ingest.py` | Upload → raw file on disk → parsed rows in SQLite. |
 | `bmsweb/db.py` | Schema and migrations. |
+| `bmsweb/splits.py` | Per-kilometre breakdown of a ride. |
 | `bmsweb/api/` | The v1 API: health, sessions, stats. |
+| `bmsweb/static/` | The frontend: dashboard, lists, ride detail. No build step. |
 | `bmsweb/cli.py` | `summarise`, `import`, `reparse`. |
 
 The ports are deliberate, not incidental: the same ride opened on the phone and in the browser must
@@ -49,7 +51,8 @@ only thing worth backing up, and even losing the database costs a `bmsctl repars
 | `POST /api/v1/sessions` | Multipart upload. Idempotent on the content hash. |
 | `GET /api/v1/sessions` | Filter by kind, local date range, free text; paginated. |
 | `GET /api/v1/sessions/{id}` | Everything stored for one session. |
-| `GET /api/v1/sessions/{id}/track` | Route points and bounds. |
+| `GET /api/v1/sessions/{id}/track` | Route points and bounds; `?detail=full` for every fix. |
+| `GET /api/v1/sessions/{id}/splits` | Per-kilometre rows; `?km=` to resize them. |
 | `GET /api/v1/sessions/{id}/series` | Charts, min/max downsampled, with dropouts listed. |
 | `GET /api/v1/sessions/{id}/raw.csv` | The original file back, byte for byte. |
 | `PATCH /api/v1/sessions/{id}` | Title and notes. |

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from typing import Iterator
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
@@ -14,8 +15,10 @@ def settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
-def connection(request: Request) -> sqlite3.Connection:
-    return request.app.state.connection
+def connection(request: Request) -> Iterator[sqlite3.Connection]:
+    """One connection for the life of this request, closed when it finishes."""
+    with request.app.state.db.session() as handle:
+        yield handle
 
 
 def require_token(

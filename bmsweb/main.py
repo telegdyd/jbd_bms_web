@@ -31,11 +31,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = config
-        app.state.connection = db.connect(config.database_path)
+        app.state.db = db.Database(config.database_path)
         try:
             yield
         finally:
-            app.state.connection.close()
+            app.state.db.close()
 
     app = FastAPI(
         title="bms-web",

@@ -11,7 +11,11 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from ..config import Settings
+from ..db import transaction
 from ..ingest import IngestStatus, ingest, delete as delete_session, sha256_of
+from ..parse import BmsSample
+from ..simplify import located, simplify
+from ..splits import splits as compute_splits
 from . import deps
 
 router = APIRouter(prefix="/sessions")
@@ -133,7 +137,7 @@ def patch_session(
     changes = patch.model_dump(exclude_unset=True)
     if changes:
         assignments = ", ".join(f"{name} = ?" for name in changes)
-        with connection:
+        with transaction(connection):
             connection.execute(
                 f"UPDATE sessions SET {assignments} WHERE id = ?",
                 [*changes.values(), session_id],
@@ -175,34 +179,95 @@ def raw_csv(
 def track(
     session_id: int,
     connection: sqlite3.Connection = Depends(deps.connection),
+    detail: str = Query(default="drawn", pattern="^(drawn|full)$"),
 ) -> dict:
     """
-    The route, already simplified at ingest. Points carry the values a map colours by, so the
-    frontend does not have to join two responses together to shade a line by speed.
+    The route, with the values a map colours by on each point — so shading a line by speed does not
+    mean joining two responses together in the browser.
+
+    `drawn` is the cleaned-up track, which is what should actually be drawn: a three-hour ride is
+    ten thousand fixes, and one polyline segment per fix makes a map that cannot be panned. `full`
+    returns every fix for anything that needs them.
     """
     row = _require(connection, session_id)
     if not row["has_location"]:
-        return {"id": session_id, "points": [], "bounds": None}
+        return {"id": session_id, "detail": detail, "points": [], "bounds": None}
 
-    points = connection.execute(
-        """
-        SELECT t_ms, lat, lon, alt_m, speed_kmh, watts, soc
-        FROM samples
-        WHERE session_id = ? AND lat IS NOT NULL AND lon IS NOT NULL
-        ORDER BY t_ms
-        """,
-        (session_id,),
-    ).fetchall()
+    samples = _samples_of(connection, session_id)
+    points = located(samples) if detail == "full" else simplify(samples)
 
     return {
         "id": session_id,
+        "detail": detail,
         "polyline": row["polyline"],
         "bounds": {
             "min_lat": row["min_lat"], "min_lon": row["min_lon"],
             "max_lat": row["max_lat"], "max_lon": row["max_lon"],
         },
-        "points": [dict(p) for p in points],
+        "points": [
+            {
+                "t_ms": p.at_ms,
+                "lat": p.latitude,
+                "lon": p.longitude,
+                "alt_m": p.altitude_m,
+                "speed_kmh": p.speed_kmh,
+                "watts": p.watts,
+                "soc": p.soc,
+            }
+            for p in points
+        ],
     }
+
+
+@router.get("/{session_id}/splits")
+def session_splits(
+    session_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    km: float = Query(default=1.0, gt=0.05, le=50.0),
+) -> dict:
+    row = _require(connection, session_id)
+    if not row["has_location"]:
+        # An EKD01 recording has a distance but no positions, so there is nothing to cut into
+        # kilometres. Better an empty list the page can hide than invented rows.
+        return {"id": session_id, "km": km, "splits": []}
+
+    samples = _samples_of(connection, session_id)
+    return {
+        "id": session_id,
+        "km": km,
+        "splits": [s.as_dict() for s in compute_splits(samples, row["gap_threshold_ms"], km)],
+    }
+
+
+def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSample]:
+    """
+    Rebuilt from the index rather than re-read from the CSV, so a page view costs no file IO.
+    Only the fields the distance and energy rules touch are filled in.
+    """
+    rows = connection.execute(
+        """
+        SELECT t_ms, volts, amps, watts, soc, remaining_ah, lat, lon, alt_m, speed_kmh, accuracy_m
+        FROM samples WHERE session_id = ? ORDER BY t_ms
+        """,
+        (session_id,),
+    ).fetchall()
+
+    return [
+        BmsSample(
+            at_ms=row["t_ms"],
+            volts=row["volts"] or 0.0,
+            amps=row["amps"] or 0.0,
+            watts=row["watts"] if row["watts"] is not None else 0.0,
+            soc=row["soc"] or 0,
+            remaining_ah=row["remaining_ah"] or 0.0,
+            latitude=row["lat"],
+            longitude=row["lon"],
+            altitude_m=row["alt_m"],
+            speed_kmh=row["speed_kmh"],
+            accuracy_m=row["accuracy_m"],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/{session_id}/series")

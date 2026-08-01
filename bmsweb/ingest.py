@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import SCHEMA_VERSION, polyline
 from .config import Settings
+from .db import transaction
 from .parse import BmsSample, Ekd01Sample, ParsedSession, SessionKind, parse_csv
 from .simplify import simplify
 from .summary import Summary, summarise
@@ -70,9 +71,10 @@ def ingest(
     started_at_ms, tz_offset_min = _start_of(session, source_name)
 
     raw_path = _store_raw(settings, digest, source_name, started_at_ms, tz_offset_min, content)
-    session_id = _insert(
-        connection, session, source_name, digest, raw_path, settings, started_at_ms, tz_offset_min
-    )
+    with transaction(connection):
+        session_id = _insert(
+            connection, session, source_name, digest, raw_path, settings, started_at_ms, tz_offset_min
+        )
     return IngestResult(IngestStatus.CREATED, session_id, digest)
 
 
@@ -99,7 +101,7 @@ def reparse(connection: sqlite3.Connection, settings: Settings, session_id: int)
     session = parse_csv(path.read_text(encoding="utf-8", errors="replace"))
     started_at_ms, tz_offset_min = _start_of(session, row["source_name"])
 
-    with connection:
+    with transaction(connection):
         connection.execute("DELETE FROM samples WHERE session_id = ?", (session_id,))
         connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         _insert(
@@ -136,7 +138,7 @@ def delete(connection: sqlite3.Connection, settings: Settings, session_id: int) 
             target = settings.trash_dir / f"{int(time.time())}_{path.name}"
         path.rename(target)
 
-    with connection:
+    with transaction(connection):
         connection.execute("DELETE FROM samples WHERE session_id = ?", (session_id,))
         connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     return True
@@ -249,7 +251,8 @@ def _insert(
         """,
         (_sample_row(new_id, sample) for sample in session.samples),
     )
-    connection.commit()
+    # No commit here: every caller wraps this in `transaction()`, so that a reparse replaces a
+    # session atomically instead of leaving it deleted if the rebuild fails.
     return new_id
 
 

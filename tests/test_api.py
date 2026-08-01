@@ -129,14 +129,42 @@ class TestListing:
 
 
 class TestTrack:
-    def test_returns_the_route(self, client, upload):
+    def test_returns_the_drawn_route_by_default(self, client, upload):
+        """
+        The fixture runs due north, so the cleaned-up track is its two endpoints. Drawing all six
+        would be drawing five segments of the same straight line.
+        """
         session_id = upload().json()["id"]
 
         body = client.get(f"/api/v1/sessions/{session_id}/track").json()
 
-        assert len(body["points"]) == 6
-        assert body["bounds"]["min_lat"] == 47.5
+        assert body["detail"] == "drawn"
+        assert len(body["points"]) == 2
+        assert body["bounds"]["min_lat"] == 47.5, "bounds still come from every fix"
         assert body["polyline"]
+
+    def test_full_detail_returns_every_fix(self, client, upload):
+        session_id = upload().json()["id"]
+
+        body = client.get(f"/api/v1/sessions/{session_id}/track", params={"detail": "full"}).json()
+
+        assert len(body["points"]) == 6
+
+    def test_points_carry_what_a_map_colours_by(self, client, upload):
+        session_id = upload().json()["id"]
+
+        point = client.get(f"/api/v1/sessions/{session_id}/track").json()["points"][0]
+
+        assert point["speed_kmh"] == 12.0
+        assert point["watts"] == -360.0
+        assert point["soc"] == 90
+
+    def test_an_unknown_detail_level_is_refused(self, client, upload):
+        session_id = upload().json()["id"]
+
+        response = client.get(f"/api/v1/sessions/{session_id}/track", params={"detail": "wat"})
+
+        assert response.status_code == 422
 
     def test_a_session_without_gps_has_an_empty_track(self, client, fixture_bytes):
         response = client.post(
