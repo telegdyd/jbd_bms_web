@@ -47,8 +47,36 @@ class Settings:
         return bool(self.upload_token)
 
     def prepare(self) -> None:
+        """
+        Create the data directories, and fail with a sentence rather than a traceback if they are
+        not writable.
+
+        This is the one startup problem worth spelling out. The container runs as an ordinary user,
+        so a bind-mounted host directory owned by root leaves the app unable to write, and the
+        symptom — a container that restarts for ever while the stack claims to be deployed — says
+        nothing at all about the cause.
+        """
         for directory in (self.data_dir, self.raw_dir, self.trash_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise RuntimeError(
+                    f"Cannot create {directory}: {error}. "
+                    f"If this is a bind-mounted host directory, it is probably owned by root while "
+                    f"the container runs as uid 10001 — either use a named volume, or "
+                    f"`chown -R 10001:10001` the directory on the host."
+                ) from error
+
+        probe = self.data_dir / ".writable"
+        try:
+            probe.touch()
+            probe.unlink()
+        except OSError as error:
+            raise RuntimeError(
+                f"{self.data_dir} exists but is not writable by this container ({error}). "
+                f"It is most likely a bind mount owned by root; the container runs as uid 10001. "
+                f"Either use a named volume, or `chown -R 10001:10001` the directory on the host."
+            ) from error
 
 
 def load_settings() -> Settings:

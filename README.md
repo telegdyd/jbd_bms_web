@@ -36,15 +36,41 @@ not disagree. [docs/csv-format.md](docs/csv-format.md) is the contract between t
 ## Running it
 
 ```bash
-cp .env.example .env && docker compose up -d --build
+docker compose up -d --build
 ```
 
-Everything in `.env` already has a working default. `BMS_BIND=8080` listens on every interface,
-which is what you want on a home LAN; put an address in front of the port to pin it to one
-interface instead. `BMS_UPLOAD_TOKEN` empty means no authentication.
+Nothing needs configuring. `cp .env.example .env` first if you want to change the port, set a
+token, or move the timezone.
 
-All state lives in `./data` — the SQLite index and every uploaded original. That directory is the
-only thing worth backing up, and even losing the database costs a `bmsctl reparse`, not a ride.
+State lives in the `bms-data` volume — the SQLite index and every uploaded original. That volume is
+the only thing worth backing up, and even losing the database costs a `bmsctl reparse`, not a ride.
+
+### Portainer
+
+Add a stack with the **Repository** method pointed at this repo; the compose file works as-is with
+no environment variables set. Portainer does **not** read `.env` from the repository, so set
+anything you want to change in the stack's own "Environment variables" box.
+
+Two things are worth knowing, because both fail in the same confusing way — a container that
+restarts for ever while the stack cheerfully reports itself deployed:
+
+**Use the named volume.** The container runs as an ordinary user (uid 10001). Docker creates a
+bind-mounted host directory as root and mounts it over `/data`, discarding the ownership the image
+set, so the app cannot write and dies on startup. The compose file uses a named volume for exactly
+this reason. If you do want the data at a specific host path, either `chown -R 10001:10001` that
+directory first, or add `user: "0:0"` to the service and accept it running as root.
+
+**Check the container log before anything else.** It prints what it resolved on every start:
+
+```
+bms-web ready
+  data      /data
+  sessions  0
+  auth      off (no token set)
+```
+
+If you see that and still cannot reach it, the service is fine and the problem is the port
+mapping or the host firewall. If you see a message about uid 10001 instead, it is the volume.
 
 ### The API
 

@@ -1,24 +1,39 @@
+# Works unmodified in Portainer (Repository, Web editor or Upload) with no variables set.
+# Every variable below has a default; set them in Portainer's own "Environment variables" box if
+# you want something else. Portainer does not read a .env file from the repository.
+
 services:
   bmsweb:
     build: .
-    image: bms-web
-    container_name: bms-web
+    image: bms-web:latest
     restart: unless-stopped
 
     ports:
-      # Just a port ("8080") listens on every interface, which is what you want on a home LAN.
-      # Put an address in front ("192.168.1.10:8080") to pin it to one interface instead.
-      # Either way, edit BMS_BIND in .env — nothing else needs changing.
-      - "${BMS_BIND:-8080}:8000"
+      # Host port on the left. Change it here, or set BMS_PORT in Portainer.
+      # To listen on one interface only, write it out in full: "192.168.1.10:8080:8000".
+      - "${BMS_PORT:-8080}:8000"
 
     volumes:
-      # The SQLite index and every uploaded original. This is the only thing worth backing up.
-      - ./data:/data
+      # A named volume, not a bind mount, and this matters more than it looks.
+      #
+      # The container runs as an ordinary user (uid 10001). Docker creates a bind-mounted host
+      # directory as root and mounts it over /data, throwing away the ownership the image set —
+      # so the app cannot write, dies on startup, and the container restart-loops while the stack
+      # still reports itself deployed. A named volume is initialised from the image instead, and
+      # keeps that ownership.
+      #
+      # To keep the data at a path of your choosing on the host, see the note in README.md: it
+      # needs a `chown 10001` or a `user:` override, and is not just a matter of swapping the line.
+      - bms-data:/data
 
     environment:
-      # Empty means no authentication, which is the default. Fill it in and the phone has to send
-      # the same value as a bearer token.
+      # Empty means no authentication, which is the default and is fine on a home LAN.
       BMS_UPLOAD_TOKEN: "${BMS_UPLOAD_TOKEN:-}"
       BMS_MAX_UPLOAD_MB: "${BMS_MAX_UPLOAD_MB:-256}"
-      # Only affects log timestamps; recordings carry their own offset.
+      # Only affects log timestamps; recordings carry their own UTC offset.
       TZ: "${TZ:-Europe/Budapest}"
+
+# No container_name: it stops the stack being redeployed while an old container of that name is
+# still around, which is a confusing failure for something that buys nothing.
+volumes:
+  bms-data:
