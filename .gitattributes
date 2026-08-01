@@ -1,0 +1,6 @@
+# The service runs on Linux; keep the working tree from committing CRLF into it.
+* text=auto eol=lf
+
+# Recordings are fixtures whose exact bytes are the point of the test — never rewrite their
+# line endings. One of the tests deliberately feeds CRLF in, and it must be the one deciding that.
+*.csv -text
