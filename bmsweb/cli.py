@@ -14,6 +14,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import SCHEMA_VERSION, db
+from .config import load_settings
+from .ingest import ingest, reparse
 from .parse import SessionKind, parse_csv
 from .simplify import simplify
 from .summary import summarise
@@ -26,6 +29,19 @@ def main(argv: list[str] | None = None) -> int:
     summarise_cmd = sub.add_parser("summarise", help="print the summary for a recording")
     summarise_cmd.add_argument("path", type=Path, nargs="+")
 
+    import_cmd = sub.add_parser(
+        "import", help="load recordings straight off disk, without going through the phone"
+    )
+    import_cmd.add_argument("path", type=Path, nargs="+", help="CSV files or directories of them")
+
+    reparse_cmd = sub.add_parser(
+        "reparse", help="rebuild stored figures from the raw CSVs after a logic change"
+    )
+    reparse_cmd.add_argument("ids", type=int, nargs="*", help="default: everything out of date")
+    reparse_cmd.add_argument(
+        "--all", action="store_true", help="rebuild every session, not just stale ones"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "summarise":
@@ -33,6 +49,68 @@ def main(argv: list[str] | None = None) -> int:
             if i:
                 print()
             _print_summary(path)
+        return 0
+
+    if args.command == "import":
+        return _import(args.path)
+
+    if args.command == "reparse":
+        return _reparse(args.ids, args.all)
+
+    return 0
+
+
+def _import(paths: list[Path]) -> int:
+    settings = load_settings()
+    settings.prepare()
+    connection = db.connect(settings.database_path)
+
+    files: list[Path] = []
+    for path in paths:
+        files.extend(sorted(path.glob("*.csv")) if path.is_dir() else [path])
+
+    created = duplicates = 0
+    for file in files:
+        result = ingest(connection, settings, file.name, file.read_bytes())
+        if result.status.value == "created":
+            created += 1
+        else:
+            duplicates += 1
+        print(f"{result.status.value:9} {file.name} → id {result.session_id}")
+
+    print(f"\n{created} imported, {duplicates} already present")
+    connection.close()
+    return 0
+
+
+def _reparse(ids: list[int], everything: bool) -> int:
+    settings = load_settings()
+    settings.prepare()
+    connection = db.connect(settings.database_path)
+
+    if ids:
+        targets = ids
+    else:
+        query = "SELECT id FROM sessions"
+        params: tuple = ()
+        if not everything:
+            query += " WHERE schema_version < ?"
+            params = (SCHEMA_VERSION,)
+        targets = [row["id"] for row in connection.execute(query + " ORDER BY id", params)]
+
+    if not targets:
+        print(f"Nothing to do — every session is at schema version {SCHEMA_VERSION}.")
+        return 0
+
+    done = 0
+    for session_id in targets:
+        if reparse(connection, settings, session_id):
+            done += 1
+        else:
+            print(f"skipped {session_id}: no session, or its raw file is missing")
+
+    print(f"{done} of {len(targets)} rebuilt at schema version {SCHEMA_VERSION}")
+    connection.close()
     return 0
 
 

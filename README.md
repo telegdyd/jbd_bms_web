@@ -9,8 +9,9 @@ carry a bearer token.
 
 ## Status
 
-Milestone 1 of [docs/plan.md](docs/plan.md) — the ingest core. Parsing, summary, geo, route
-simplification and polyline encoding, with tests. No web server yet.
+Milestones 1 and 2 of [docs/plan.md](docs/plan.md): the ingest core, and the service around it.
+The API is complete and the container runs. The frontend (milestone 3) and the phone's sync
+(milestone 4) are next — for now recordings go in through the API or `bmsctl import`.
 
 | | |
 | --- | --- |
@@ -19,10 +20,57 @@ simplification and polyline encoding, with tests. No web server yet.
 | `bmsweb/geo.py` | Haversine and the flat-earth projection. Port of `Geo`. |
 | `bmsweb/simplify.py` | Route cleanup for drawing. Port of `RouteSimplifier`. |
 | `bmsweb/polyline.py` | Encoded polyline, so a list of rides is one request. |
-| `bmsweb/cli.py` | `summarise`, for checking a real recording against what the app shows. |
+| `bmsweb/ingest.py` | Upload → raw file on disk → parsed rows in SQLite. |
+| `bmsweb/db.py` | Schema and migrations. |
+| `bmsweb/api/` | The v1 API: health, sessions, stats. |
+| `bmsweb/cli.py` | `summarise`, `import`, `reparse`. |
 
 The ports are deliberate, not incidental: the same ride opened on the phone and in the browser must
 not disagree. [docs/csv-format.md](docs/csv-format.md) is the contract between the two halves.
+
+## Running it
+
+```bash
+cp .env.example .env && docker compose up -d --build
+```
+
+Everything in `.env` already has a working default. `BMS_BIND=8080` listens on every interface,
+which is what you want on a home LAN; put an address in front of the port to pin it to one
+interface instead. `BMS_UPLOAD_TOKEN` empty means no authentication.
+
+All state lives in `./data` — the SQLite index and every uploaded original. That directory is the
+only thing worth backing up, and even losing the database costs a `bmsctl reparse`, not a ride.
+
+### The API
+
+| | |
+| --- | --- |
+| `GET /api/v1/health` | Unauthenticated, so the phone can probe it to decide it is home. |
+| `POST /api/v1/sessions` | Multipart upload. Idempotent on the content hash. |
+| `GET /api/v1/sessions` | Filter by kind, local date range, free text; paginated. |
+| `GET /api/v1/sessions/{id}` | Everything stored for one session. |
+| `GET /api/v1/sessions/{id}/track` | Route points and bounds. |
+| `GET /api/v1/sessions/{id}/series` | Charts, min/max downsampled, with dropouts listed. |
+| `GET /api/v1/sessions/{id}/raw.csv` | The original file back, byte for byte. |
+| `PATCH /api/v1/sessions/{id}` | Title and notes. |
+| `DELETE /api/v1/sessions/{id}` | Index row goes, original moves to `data/trash/`. |
+| `GET /api/v1/stats` | Totals and per-day buckets for the dashboard. |
+
+Interactive docs at `/docs` while the service is running.
+
+### Loading recordings without the phone
+
+```bash
+BMS_DATA_DIR=./data python -m bmsweb.cli import /path/to/logs/
+```
+
+### After changing how a figure is computed
+
+Bump `SCHEMA_VERSION` in `bmsweb/__init__.py`, then rebuild the history from the stored originals:
+
+```bash
+BMS_DATA_DIR=./data python -m bmsweb.cli reparse
+```
 
 ## Development
 

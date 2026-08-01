@@ -218,27 +218,19 @@ Dark mode from the start — it will mostly be read in the evening.
 
 ### 2.5 Container
 
-```yaml
-services:
-  bmsweb:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "192.168.1.10:8080:8000"   # LAN interface only, never 0.0.0.0
-    volumes:
-      - ./data:/data
-    environment:
-      BMS_UPLOAD_TOKEN: ${BMS_UPLOAD_TOKEN}
-      BMS_DATA_DIR: /data
-      TZ: Europe/Budapest
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-```
+See `docker-compose.yml` and `.env.example`. Everything is a variable with a working default, so
+the compose file itself never needs editing:
 
-Binding to the specific LAN address rather than `0.0.0.0` is the actual security boundary; the
-bearer token is the second layer, so that anything else on the LAN can't post junk. `python:3.12-slim`,
-non-root user, `uvicorn` directly (no gunicorn — this serves one household).
+- `BMS_BIND` — `8080` listens on every interface, which is the sensible default on a home LAN.
+  Prefix an address (`192.168.1.10:8080`) to pin it to one interface. This is a preference, not a
+  requirement; a home router is not forwarding the port either way.
+- `BMS_UPLOAD_TOKEN` — **empty by default, meaning no authentication.** Worth setting only for the
+  unglamorous reason that an unauthenticated POST which writes files to disk is reachable by
+  anything on the network, including a page open in a browser tab. It costs one header.
+
+`python:3.12-slim`, non-root user, `uvicorn` run directly (no gunicorn — this serves one
+household), healthcheck through the interpreter that is already in the image rather than pulling
+in curl for one request.
 
 Backup: `/data` holds both stores. A nightly `sqlite3 /data/bms.sqlite ".backup /data/backup/…"`
 plus whatever already backs up the server covers it, and even total loss of the SQLite file is
@@ -295,10 +287,12 @@ work for a threat model that is already "my own LAN".
 Each milestone is independently useful, and the first two need no app changes at all — existing
 CSVs can be pulled off the phone and `curl`ed in.
 
-1. **Ingest core.** Parser, summary, geo, simplifier + golden-file tests against real recordings.
-   This is where metric parity is won or lost; do it before any web code.
-2. **Server + API + container.** Upload, storage, reparse CLI, read endpoints, health. Verify by
-   uploading a month of existing recordings by hand.
+1. ~~**Ingest core.** Parser, summary, geo, simplifier + golden-file tests against real recordings.
+   This is where metric parity is won or lost; do it before any web code.~~ **Done**, except that
+   the fixtures are synthetic — parity against a real recording from the phone is still unproven.
+2. ~~**Server + API + container.** Upload, storage, reparse CLI, read endpoints, health. Verify by
+   uploading a month of existing recordings by hand.~~ **Done**, plus `bmsctl import` for loading
+   recordings straight off disk. Verification against a real month is still outstanding.
 3. **Frontend v1.** List and detail pages: summary tiles, map, linked charts. Usable at this point.
 4. **Android sync.** Settings + manual "Sync now" first (easy to debug), then WorkManager
    automation once uploads are known-good.

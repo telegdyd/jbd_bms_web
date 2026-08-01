@@ -1,0 +1,24 @@
+services:
+  bmsweb:
+    build: .
+    image: bms-web
+    container_name: bms-web
+    restart: unless-stopped
+
+    ports:
+      # Just a port ("8080") listens on every interface, which is what you want on a home LAN.
+      # Put an address in front ("192.168.1.10:8080") to pin it to one interface instead.
+      # Either way, edit BMS_BIND in .env — nothing else needs changing.
+      - "${BMS_BIND:-8080}:8000"
+
+    volumes:
+      # The SQLite index and every uploaded original. This is the only thing worth backing up.
+      - ./data:/data
+
+    environment:
+      # Empty means no authentication, which is the default. Fill it in and the phone has to send
+      # the same value as a bearer token.
+      BMS_UPLOAD_TOKEN: "${BMS_UPLOAD_TOKEN:-}"
+      BMS_MAX_UPLOAD_MB: "${BMS_MAX_UPLOAD_MB:-256}"
+      # Only affects log timestamps; recordings carry their own offset.
+      TZ: "${TZ:-Europe/Budapest}"
