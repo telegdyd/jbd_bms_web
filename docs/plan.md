@@ -85,7 +85,7 @@ bms-web/
     align.py           the offset between two recording devices' clocks
     companions.py      attaching a GPX to a session, and serving its channels
     cli.py             ✓ bmsctl summarise, for parity-checking real recordings
-    api/               sessions.py, stats.py, health.py
+    api/               sessions.py, stats.py, health.py, pack.py
     static/            index.html, app.js, style.css, vendored leaflet + uplot
     templates/         optional Jinja shell
   docs/
@@ -216,6 +216,7 @@ All under `/api/v1`, all authenticated with `Authorization: Bearer <token>` exce
 | `PATCH` | `/sessions/{id}/companions/{cid}` | `offset_ms` to set the shift, `realign` to measure it again. |
 | `DELETE` | `/sessions/{id}/companions/{cid}` | Detach; the GPX moves to `/data/trash/`. |
 | `GET` | `/stats` | `?period=week\|month\|year\|all` — totals, streaks, per-day buckets. |
+| `GET` | `/pack` | The pack across recordings: watt-hours per full charge, the latest charge, range at recent efficiency, and where rides start. |
 
 `hr` and `cadence` are requestable from `/series` alongside the recording's own columns, but come
 from an attached companion rather than from `samples`: they are resampled onto the same instants

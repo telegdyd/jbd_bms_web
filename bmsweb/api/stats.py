@@ -67,4 +67,23 @@ def stats(
         params,
     ).fetchall()
 
-    return {"totals": result, "days": [dict(day) for day in days]}
+    # Monday-start weeks. SQLite's 'weekday 1' moves forward to a Monday, so stepping back six days
+    # first lands every date on the Monday of its own week.
+    weeks = connection.execute(
+        f"""
+        SELECT date(local_date, '-6 days', 'weekday 1') AS week_start,
+               COUNT(*) AS sessions,
+               COALESCE(SUM(distance_km), 0)   AS distance_km,
+               COALESCE(SUM(discharged_wh), 0) AS discharged_wh,
+               COALESCE(SUM(moving_seconds), 0) AS moving_seconds
+        FROM sessions WHERE {clause}
+        GROUP BY week_start ORDER BY week_start
+        """,
+        params,
+    ).fetchall()
+
+    return {
+        "totals": result,
+        "days": [dict(day) for day in days],
+        "weeks": [dict(week) for week in weeks],
+    }

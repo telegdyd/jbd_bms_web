@@ -32,7 +32,7 @@ but it has not yet run on an actual phone.
 | `bmsweb/gpx.py` | GPX → points. Heart rate out of a Strava export. |
 | `bmsweb/align.py` | Measuring the offset between two devices' clocks. |
 | `bmsweb/companions.py` | Attaching a GPX to a recording, and serving its channels. |
-| `bmsweb/api/` | The v1 API: health, sessions, companions, stats. |
+| `bmsweb/api/` | The v1 API: health, sessions, companions, stats, pack. |
 | `bmsweb/static/` | The frontend: dashboard, lists, ride detail. No build step. |
 | `bmsweb/cli.py` | `summarise`, `import`, `reparse`, `attach`. |
 

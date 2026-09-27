@@ -23,12 +23,16 @@ def health(
     connection: sqlite3.Connection = Depends(deps.connection),
     settings: Settings = Depends(deps.settings),
 ) -> dict:
-    sessions = connection.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
+    row = connection.execute(
+        "SELECT COUNT(*) AS n, MAX(uploaded_at_ms) AS last_upload_ms FROM sessions"
+    ).fetchone()
     return {
         "status": "ok",
         "service": "bms-web",
         "schema_version": SCHEMA_VERSION,
-        "sessions": sessions,
+        "sessions": row["n"],
+        # When the phone last delivered something, for the web page's "synced" line.
+        "last_upload_ms": row["last_upload_ms"],
         # So the phone can tell whether to bother attaching a token.
         "auth_required": settings.auth_required,
     }
