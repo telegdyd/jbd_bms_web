@@ -444,7 +444,11 @@ function rideRow(session, { onEnter, onLeave } = {}) {
     el('div', { class: 'title' },
       el('span', {}, session.title || defaultName(session)),
       session.kind === 'ekd01' ? el('span', { class: 'badge' }, 'display') : null,
-      !session.has_location ? el('span', { class: 'badge' }, 'no gps') : null),
+      !session.has_location ? el('span', { class: 'badge' }, 'no gps') : null,
+      session.avg_hr_bpm
+        ? el('span', { class: 'badge hr', title: 'Average heart rate, from the watch' },
+            icon('heart'), String(session.avg_hr_bpm))
+        : null),
     el('span', { class: 'n big' }, went ? [fmt.km(session.distance_km), el('small', {}, ' km')] : '—'),
     el('span', { class: 'n' }, fmt.hm(session.moving_seconds || session.duration_ms / 1000)),
     el('span', { class: 'n' }, average ? average.toFixed(1) : '—'),
@@ -751,8 +755,9 @@ async function drawHeatmap(host) {
 const CHANNELS = [
   { field: 'watts', name: 'Power', unit: 'W', colour: '--power', digits: 0, fill: true, rider: true },
   { field: 'speed_kmh', name: 'Speed', unit: 'km/h', colour: '--speed', digits: 1 },
-  /* From an attached GPX rather than from the recording. Asked for unconditionally: the server
-   * answers with nulls when nothing is attached, and a chart of nulls is not drawn. */
+  /* From the watch, in the recording itself; failing that, from an attached GPX. Asked for
+   * unconditionally: the server answers with nulls when there is neither, and a chart of nulls is
+   * not drawn. `series.sources` says which one it was. */
   { field: 'hr', name: 'Heart rate', unit: 'bpm', colour: '--hr', digits: 0, companion: true, rider: true },
   { field: 'cadence', name: 'Cadence', unit: 'rpm', colour: '--cadence', digits: 0, companion: true },
   { field: 'volts', name: 'Voltage', unit: 'V', colour: '--volts', digits: 2 },
@@ -905,9 +910,14 @@ async function detailView(root, id) {
   const onStrip = onMap ? drawProfile(mapParts, series, wanted.filter((c) => c.rider), session, marker) : [];
   drawCharts(chartHost, series, wanted.filter((c) => !onStrip.includes(c)), marker);
   if (splitBody) drawSplits(splitHost, splitBody, session.max_speed_kmh);
-  drawCompanions(companionHost, id, companions.companions);
+  const fromWatch = session.avg_hr_bpm !== null && session.avg_hr_bpm !== undefined;
+  drawCompanions(companionHost, id, companions.companions, fromWatch);
 
-  const best = bestHeartRate(companions.companions);
+  // The watch's own figures when it measured; they cover exactly the recording, with no clock to
+  // line up. Otherwise whichever attached file covers the ride best.
+  const best = fromWatch
+    ? { hr_avg: session.avg_hr_bpm, hr_max: session.max_hr_bpm }
+    : bestHeartRate(companions.companions);
   if (best) {
     hrSummary.textContent = `avg ${Math.round(best.hr_avg)} · max ${best.hr_max} bpm`;
     if (!onMap) page.querySelector('.tiles')?.append(
@@ -942,6 +952,8 @@ function figuresPanel(session) {
     session.max_delta_mv !== null ? ['Worst cell spread', `${session.max_delta_mv} mV`] : null,
     session.min_temp_c !== null
       ? ['Temperature', `${session.min_temp_c.toFixed(1)} – ${session.max_temp_c.toFixed(1)} °C`] : null,
+    session.avg_hr_bpm !== null
+      ? ['Heart rate', `avg ${session.avg_hr_bpm} · max ${session.max_hr_bpm} bpm`] : null,
     ['Distance, exact', `${session.distance_km.toFixed(3)} km`],
   ].filter(Boolean);
 
@@ -993,6 +1005,10 @@ function summaryTiles(session, isEkd01) {
 const COLOUR_BY = {
   speed: { label: 'Speed', field: 'speed_kmh', unit: 'km/h' },
   power: { label: 'Power', field: 'watts', unit: 'W' },
+  /* Scaled from the ride's lowest reading rather than from zero: a heart never goes near zero, and
+   * against a zero floor 100 and 145 bpm are two shades of the same green. Offered only when the
+   * watch measured something. */
+  hr: { label: 'Heart rate', field: 'hr', unit: 'bpm', fromLowest: true, optional: true },
 };
 
 function drawRideMap(parts, track) {
@@ -1020,21 +1036,29 @@ function drawRideMap(parts, track) {
   const legend = el('div', { class: 'float legend' });
   const buttons = {};
 
+  const measured = (field) => points.map((p) => p[field]).filter((v) => v !== null && v !== undefined);
+
   function colourBy(mode) {
-    const { field, unit } = COLOUR_BY[mode];
-    const values = points.map((p) => p[field]).filter((v) => v !== null && v !== undefined);
+    const { field, unit, fromLowest } = COLOUR_BY[mode];
+    const values = measured(field);
     const top = values.length ? Math.max(...values) : 0;
+    const bottom = fromLowest && values.length ? Math.min(...values) : 0;
+    const span = Math.max(top - bottom, 1);
     layer.clearLayers();
 
     if (top > 0) {
       for (let i = 0; i < latlngs.length - 1; i++) {
+        const value = points[i][field];
+        // A stretch the watch missed is left grey rather than painted as its calmest.
+        const missing = fromLowest && (value === null || value === undefined);
         L.polyline([latlngs[i], latlngs[i + 1]], {
-          color: speedColour((points[i][field] ?? 0) / top),
+          color: missing ? css('--muted') : speedColour(((value ?? 0) - bottom) / span),
           weight: 5,
           opacity: 0.95,
         }).addTo(layer);
       }
-      legend.replaceChildren(el('span', {}, '0'), el('i'), el('span', {}, `${top.toFixed(0)} ${unit}`));
+      legend.replaceChildren(el('span', {}, bottom.toFixed(0)), el('i'),
+        el('span', {}, `${top.toFixed(0)} ${unit}`));
       legend.hidden = false;
     } else {
       L.polyline(latlngs, { color: css('--accent'), weight: 5 }).addTo(layer);
@@ -1047,6 +1071,7 @@ function drawRideMap(parts, track) {
 
   const tools = el('div', { class: 'float tools right' });
   for (const [key, option] of Object.entries(COLOUR_BY)) {
+    if (option.optional && !measured(option.field).length) continue;
     buttons[key] = el('button', { type: 'button', onclick: () => colourBy(key) }, option.label);
     tools.append(buttons[key]);
   }
@@ -1083,7 +1108,10 @@ function presentIn(series, channels) {
  * ride, read against the route it happened on. Each has its own scale, so none flattens another.
  * Returns the channels it drew, which the charts below then leave out. */
 function drawProfile(parts, series, channels, session, marker) {
-  const present = presentIn(series, channels);
+  // Altitude first: it is the backdrop, and its fill is opaque, so drawn after the others it
+  // would paint over every trace running below the height of the ground.
+  const present = presentIn(series, channels)
+    .sort((a, b) => (b.field === 'alt_m') - (a.field === 'alt_m'));
   if (!present.length) {
     parts.profile.hidden = true;
     return [];
@@ -1148,6 +1176,11 @@ function drawProfile(parts, series, channels, session, marker) {
   return present;
 }
 
+function sourceNote(series, channel) {
+  const source = (series.sources || {})[channel.field] || 'companion';
+  return source === 'recording' ? 'from the watch' : 'from the attached GPX';
+}
+
 function drawCharts(host, series, channels, marker) {
   const seconds = series.t.map((ms) => ms / 1000);
   const present = presentIn(series, channels);
@@ -1168,7 +1201,7 @@ function drawCharts(host, series, channels, marker) {
     const box = el('div', { class: 'chart' },
       el('div', { class: 'head' },
         el('span', { class: 'name' }, channel.name,
-          channel.companion ? el('small', {}, 'from the attached GPX') : null),
+          channel.companion ? el('small', {}, sourceNote(series, channel)) : null),
         reading));
     host.append(box);
 
@@ -1242,6 +1275,7 @@ function drawSplits(host, body, topSpeed) {
   }
 
   const fastest = Math.max(...body.splits.map((s) => s.avg_speed_kmh || 0), 1);
+  const withHr = body.splits.some((s) => s.avg_hr_bpm !== null && s.avg_hr_bpm !== undefined);
 
   const rows = body.splits.map((split) => {
     const partial = split.distance_km < body.km * 0.95;
@@ -1261,6 +1295,7 @@ function drawSplits(host, body, topSpeed) {
       el('td', {}, split.discharged_wh.toFixed(1)),
       el('td', { class: 'eff' }, split.distance_km > 0.05
         ? (split.discharged_wh / split.distance_km).toFixed(1) : '—'),
+      withHr ? el('td', { class: 'hr' }, split.avg_hr_bpm ?? '—') : null,
       el('td', { class: 'alt' }, fmt.metres(split.altitude_change_m)));
   });
 
@@ -1268,7 +1303,8 @@ function drawSplits(host, body, topSpeed) {
   host.append(el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, 'km'), el('th', {}, 'Time'), el('th', {}, 'km/h'), el('th', {}, ''),
-      el('th', {}, 'Wh'), el('th', {}, 'Wh/km'), el('th', {}, 'Δ alt'))),
+      el('th', {}, 'Wh'), el('th', {}, 'Wh/km'), withHr ? el('th', {}, 'bpm') : null,
+      el('th', {}, 'Δ alt'))),
     tbody));
 
   if (rows.length > SPLITS_SHOWN) {
@@ -1289,10 +1325,18 @@ function bestHeartRate(companions) {
   return measured.reduce((a, b) => (b.hr_in_session > a.hr_in_session ? b : a));
 }
 
-function drawCompanions(host, sessionId, companions) {
+function drawCompanions(host, sessionId, companions, fromWatch) {
   host.replaceChildren(
+    ...(fromWatch ? [watchNote()] : []),
     ...companions.map((companion) => companionCard(sessionId, companion)),
-    attachForm(sessionId, companions.length));
+    attachForm(sessionId, companions.length, fromWatch));
+}
+
+function watchNote() {
+  return el('div', { class: 'companion' },
+    el('div', { class: 'title' }, 'Measured by the watch'),
+    el('div', { class: 'match' }, icon('check'),
+      el('span', {}, 'Recorded by the phone alongside the pack, on the same clock — nothing to line up.')));
 }
 
 function companionCard(sessionId, companion) {
@@ -1376,7 +1420,7 @@ function alignmentNote(companion) {
     'The file\'s own timestamps are used as they are.';
 }
 
-function attachForm(sessionId, existing) {
+function attachForm(sessionId, existing, fromWatch) {
   const input = el('input', { type: 'file', accept: '.gpx,application/gpx+xml', 'aria-label': 'GPX file' });
   const status = el('span', { class: 'saving' });
 
@@ -1396,7 +1440,10 @@ function attachForm(sessionId, existing) {
   }
 
   return el('div', { class: 'companion' },
-    el('p', { class: 'sub', style: 'margin:0' }, existing
+    el('p', { class: 'sub', style: 'margin:0' }, fromWatch
+      ? 'A GPX exported from Strava can still be attached for its cadence. The watch\'s heart rate ' +
+        'stays the one charted.'
+      : existing
       ? 'Attach another file — one Strava activity can cover two recordings.'
       : 'The pack knows nothing about the rider. Open the ride on Strava, choose ⋯ → Export GPX, ' +
         'and attach the file here to put heart rate on these charts. The two clocks are lined up ' +

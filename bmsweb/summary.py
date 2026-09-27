@@ -13,6 +13,7 @@ parts are reproduced rather than improved:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from . import geo
@@ -53,6 +54,9 @@ class Summary:
     #: Energy drawn per kilometre — None until enough distance has accumulated to mean anything,
     #: and always None for EKD01, which reports no electrical data at all.
     wh_per_km: float | None = None
+    #: Over the samples the watch measured; None when none were.
+    avg_heart_rate_bpm: int | None = None
+    max_heart_rate_bpm: int | None = None
 
 
 def summarise(session: ParsedSession) -> Summary:
@@ -89,6 +93,7 @@ def _summarise_bms(session: ParsedSession) -> Summary:
     temps = [t for sample in s for t in sample.temps_c if t is not None]
     deltas = [sample.delta_mv for sample in s if sample.delta_mv is not None]
     speeds = [sample.speed_kmh for sample in s if sample.speed_kmh is not None]
+    heart_rates = [sample.heart_rate_bpm for sample in s if sample.heart_rate_bpm is not None]
 
     distance_km = travelled_km(s, session.gap_threshold_ms)
     moving_seconds = _moving_seconds(s, session.gap_threshold_ms)
@@ -118,6 +123,8 @@ def _summarise_bms(session: ParsedSession) -> Summary:
         wh_per_km=(
             discharged / distance_km if distance_km >= MIN_DISTANCE_FOR_WH_PER_KM else None
         ),
+        avg_heart_rate_bpm=_round_half_up(sum(heart_rates) / len(heart_rates)) if heart_rates else None,
+        max_heart_rate_bpm=max(heart_rates) if heart_rates else None,
     )
 
 
@@ -178,6 +185,14 @@ def travelled_km(samples: tuple[Sample, ...], gap_threshold_ms: int) -> float:
             metres += step
 
     return metres / 1000.0
+
+
+def _round_half_up(value: float) -> int:
+    """
+    Kotlin's `roundToInt`, which the app uses. Python's `round` goes to even, so a mean of 132.5
+    would read 132 here and 133 on the phone.
+    """
+    return math.floor(value + 0.5)
 
 
 def _moving_seconds(samples: tuple[Sample, ...], gap_threshold_ms: int) -> int:

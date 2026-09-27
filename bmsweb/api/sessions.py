@@ -39,7 +39,8 @@ CHARTABLE = SERIES_FIELDS | set(companions.CHANNELS)
 LIST_COLUMNS = """
     id, sha256, source_name, kind, device_label, started_at_ms, ended_at_ms, tz_offset_min,
     local_date, duration_ms, sample_count, has_location, is_ride, distance_km, moving_seconds,
-    max_speed_kmh, discharged_wh, charged_wh, wh_per_km, soc_start, soc_end, title, polyline
+    max_speed_kmh, discharged_wh, charged_wh, wh_per_km, soc_start, soc_end, avg_hr_bpm, title,
+    polyline
 """
 
 
@@ -359,6 +360,7 @@ def track(
                 "speed_kmh": p.speed_kmh,
                 "watts": p.watts,
                 "soc": p.soc,
+                "hr": p.heart_rate_bpm,
             }
             for p in points
         ],
@@ -392,7 +394,7 @@ def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSamp
     """
     rows = connection.execute(
         """
-        SELECT t_ms, volts, amps, watts, soc, remaining_ah, lat, lon, alt_m, speed_kmh, accuracy_m
+        SELECT t_ms, volts, amps, watts, soc, remaining_ah, lat, lon, alt_m, speed_kmh, accuracy_m, hr
         FROM samples WHERE session_id = ? ORDER BY t_ms
         """,
         (session_id,),
@@ -411,6 +413,7 @@ def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSamp
             altitude_m=row["alt_m"],
             speed_kmh=row["speed_kmh"],
             accuracy_m=row["accuracy_m"],
+            heart_rate_bpm=row["hr"],
         )
         for row in rows
     ]
@@ -442,6 +445,18 @@ def series(
     own = [f for f in requested if f in SERIES_FIELDS]
     attached = [f for f in requested if f in companions.CHANNELS]
 
+    # Heart rate the watch put in the recording is already on its clock, with nothing to line up,
+    # so when there is one it is *the* heart rate and an attached GPX's is not consulted. Two traces
+    # of the same heart on one chart would only invite the question of which to believe.
+    sources = {}
+    if "hr" in requested:
+        if row["max_hr_bpm"] is not None:
+            attached.remove("hr")
+            own.append("hr")
+            sources["hr"] = "recording"
+        else:
+            sources["hr"] = "companion"
+
     columns = "".join(f", {name}" for name in own)
     rows = connection.execute(
         f"SELECT t_ms{columns} FROM samples WHERE session_id = ? ORDER BY t_ms",
@@ -449,7 +464,10 @@ def series(
     ).fetchall()
 
     if not rows:
-        return {"id": session_id, "t": [], "fields": {f: [] for f in requested}, "gaps": []}
+        return {
+            "id": session_id, "t": [], "fields": {f: [] for f in requested}, "gaps": [],
+            "sources": sources,
+        }
 
     gaps = _gaps([r["t_ms"] for r in rows], row["gap_threshold_ms"])
 
@@ -467,7 +485,7 @@ def series(
     # beside it.
     body["fields"].update(companions.channels(connection, session_id, body["t"], attached))
 
-    return {"id": session_id, **body, "gaps": gaps}
+    return {"id": session_id, **body, "gaps": gaps, "sources": sources}
 
 
 def _bucket(rows: list[sqlite3.Row], fields: list[str], bucket_count: int) -> dict:

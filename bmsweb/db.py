@@ -125,6 +125,16 @@ SCHEMA = [
         PRIMARY KEY (companion_id, t_ms)
     ) WITHOUT ROWID;
     """,
+    # 3 — heart rate from the watch, which the phone writes into the recording itself.
+    #
+    # Unlike a companion's, this one belongs on `samples`: it is a column of the CSV, so a reparse
+    # rebuilds it from the original like every other, and it is already on the recording's clock.
+    # Named `hr` to match the companion channel, so the charts ask for one field either way.
+    """
+    ALTER TABLE samples ADD COLUMN hr INTEGER;
+    ALTER TABLE sessions ADD COLUMN avg_hr_bpm INTEGER;
+    ALTER TABLE sessions ADD COLUMN max_hr_bpm INTEGER;
+    """,
 ]
 
 

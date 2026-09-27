@@ -230,6 +230,8 @@ def _insert(
         "moving_seconds": s.moving_seconds,
         "max_speed_kmh": s.max_speed_kmh,
         "wh_per_km": s.wh_per_km,
+        "avg_hr_bpm": s.avg_heart_rate_bpm,
+        "max_hr_bpm": s.max_heart_rate_bpm,
         "min_lat": min((x.latitude for x in located), default=None),
         "min_lon": min((x.longitude for x in located), default=None),
         "max_lat": max((x.latitude for x in located), default=None),
@@ -256,8 +258,8 @@ def _insert(
             session_id, t_ms, volts, amps, watts, soc, remaining_ah,
             delta_mv, min_cell_mv, max_cell_mv,
             lat, lon, alt_m, speed_kmh, accuracy_m,
-            cells_mv, temps_c, balance_bits, extra
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            cells_mv, temps_c, balance_bits, extra, hr
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (_sample_row(new_id, sample) for sample in session.samples),
     )
@@ -285,6 +287,7 @@ def _sample_row(session_id: int, sample: BmsSample | Ekd01Sample) -> tuple:
                     "battery_bars": sample.battery_bars,
                 }
             ),
+            None,
         )
 
     return (
@@ -297,6 +300,7 @@ def _sample_row(session_id: int, sample: BmsSample | Ekd01Sample) -> tuple:
         json.dumps(sample.temps_c) if sample.temps_c else None,
         sample.balance_bits,
         None,
+        sample.heart_rate_bpm,
     )
 
 

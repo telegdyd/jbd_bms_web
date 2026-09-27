@@ -413,6 +413,7 @@ th:first-child, td:first-child { text-align: left; }
 td:first-child { color: var(--muted); }
 td.eff { color: var(--power); }
 td.alt { color: var(--muted); }
+td.hr { color: var(--hr); }
 tbody tr:last-child td { border-bottom: none; }
 
 .bar { height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; }

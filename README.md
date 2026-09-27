@@ -13,8 +13,9 @@ Milestones 1–4 of [docs/plan.md](docs/plan.md): the ingest core, the service a
 frontend, and the Android app's uploader (`hu.telegdy.bms.sync`, in the app repo). Recordings can
 also be loaded straight off disk with `bmsctl import`.
 
-Plus GPX import: a ride exported from Strava can be attached to the recording it belongs to, which
-is where heart rate on the ride page comes from. See [below](#heart-rate-from-a-strava-export).
+Plus heart rate, from either of two places: the Wear OS app, which the phone writes straight into
+the recording, or a GPX exported from Strava and attached to the recording it belongs to. See
+[below](#heart-rate).
 
 The phone side has been built and unit-tested, and its requests were checked against a live server,
 but it has not yet run on an actual phone.
@@ -109,7 +110,24 @@ Interactive docs at `/docs` while the service is running.
 BMS_DATA_DIR=./data python -m bmsweb.cli import /path/to/logs/
 ```
 
-### Heart rate, from a Strava export
+### Heart rate
+
+#### From the watch
+
+With the Wear OS app open during a ride, the phone adds an `hr_bpm` column to the recording (see
+[docs/csv-format.md](docs/csv-format.md)). Nothing needs doing here: the ride page charts it, puts
+average and maximum beside the other figures and in each split, can colour the route by it, and
+the ride list shows the average. It is on the recording's own clock, so there is no offset to
+measure.
+
+Recordings uploaded before this server understood the column carry it already, but their figures
+were computed without it. Run a `reparse` after updating (inside the container, from Portainer's
+console: `python -m bmsweb.cli reparse`) and they pick it up.
+
+When a recording has the watch's heart rate, that is the one charted; an attached GPX still
+contributes cadence.
+
+#### From a Strava export
 
 The pack knows everything about itself and nothing about the rider. Open the ride on Strava, choose
 **⋯ → Export GPX**, and attach the file to the session — in the browser, at the bottom of the ride

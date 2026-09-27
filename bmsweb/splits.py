@@ -35,6 +35,8 @@ class Split:
     #: per-sample rises would report hundreds of metres of climb on a flat ride, because that is
     #: what GPS altitude noise looks like when you add it up.
     altitude_change_m: float | None
+    #: Mean of the watch's readings in the split; None where it measured nothing.
+    avg_hr_bpm: int | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -63,6 +65,8 @@ def splits(
     last_ms: list[int | None] = [None] * count
     first_alt: list[float | None] = [None] * count
     last_alt: list[float | None] = [None] * count
+    hr_sum = [0] * count
+    hr_n = [0] * count
 
     for i in range(len(samples) - 1):
         # The interval belongs to the split its *start* falls in. A boundary crossed mid-interval
@@ -72,6 +76,7 @@ def splits(
         dt = following.at_ms - current.at_ms
 
         _record(bucket, current, first_ms, last_ms, first_alt, last_alt, max_speed)
+        _record_heart_rate(bucket, current, hr_sum, hr_n)
 
         if dt > gap_threshold_ms:
             continue
@@ -92,6 +97,7 @@ def splits(
     last = samples[-1]
     final = min(int(cumulative[-1] / split_km), count - 1)
     _record(final, last, first_ms, last_ms, first_alt, last_alt, max_speed)
+    _record_heart_rate(final, last, hr_sum, hr_n)
 
     return [
         Split(
@@ -112,6 +118,7 @@ def splits(
                 if first_alt[index] is not None and last_alt[index] is not None
                 else None
             ),
+            avg_hr_bpm=round(hr_sum[index] / hr_n[index]) if hr_n[index] else None,
         )
         for index in range(count)
         # A trailing sliver from the last few metres is noise, not a split worth a row.
@@ -165,6 +172,13 @@ def _record(
     speed = sample.speed_kmh
     if speed is not None and (max_speed[bucket] is None or speed > max_speed[bucket]):
         max_speed[bucket] = speed
+
+
+def _record_heart_rate(bucket: int, sample: Sample, total: list[int], count: list[int]) -> None:
+    bpm = getattr(sample, "heart_rate_bpm", None)
+    if bpm is not None:
+        total[bucket] += bpm
+        count[bucket] += 1
 
 
 def _mean_watts(current: Sample, following: Sample) -> float | None:

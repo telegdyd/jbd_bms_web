@@ -22,7 +22,7 @@ of the file content instead.
 ```
 timestamp,elapsed_s,volts,amps,watts,soc_percent,remaining_ah,
 temp1_c…tempN_c,cell1_mv…cellN_mv,delta_mv,min_cell_mv,max_cell_mv,
-[latitude,longitude,altitude_m,speed_kmh,gps_accuracy_m,]balance_bits
+[latitude,longitude,altitude_m,speed_kmh,gps_accuracy_m,]balance_bits[,hr_bpm]
 ```
 
 | Column | Notes |
@@ -37,6 +37,12 @@ temp1_c…tempN_c,cell1_mv…cellN_mv,delta_mv,min_cell_mv,max_cell_mv,
 | `delta_mv`, `min_cell_mv`, `max_cell_mv` | Across the cells present in that row; all three are empty if no cell reported. |
 | `latitude`…`gps_accuracy_m` | Present only if location logging was on when the session started. 6 decimals of coordinate, ≈0.1 m. |
 | `balance_bits` | Raw bitfield; bit N is cell N+1. One column of fixed meaning survives a pack with a different cell count. |
+| `hr_bpm` | Heart rate from the watch, integer. Present only if the watch sent a reading during the ride. Blank on rows with no reading from the previous 10 s (or the next 1 s), and on rows where the sensor had lost contact. |
+
+`hr_bpm` is not written live. The watch's readings reach the phone in batches, seconds or minutes
+late, so they collect in a side file (`<recording>.csv.hr`) and `HeartRateLog.merge` folds them in
+as a last column once the ride stops. The phone holds the recording back from sync until that is
+done, so the server only ever sees the finished file.
 
 ## EKD01 recordings
 
@@ -81,6 +87,8 @@ rules that keep those figures honest are in `bmsweb/summary.py`, ported from `Lo
   accumulate kilometres.
 - Moving time counts intervals that begin at **1 km/h** or above.
 - Wh/km is **withheld below 100 m** of travel rather than shown as a confident nonsense figure.
+- Average heart rate is the mean over the rows that have one, **rounded half up** as Kotlin's
+  `roundToInt` does, not to even as Python's `round` does.
 
 Route drawing uses a different, looser set (`bmsweb/simplify.py`, from `RouteSimplifier`): 25 m
 accuracy limit, 6 m minimum separation, 3 m Douglas-Peucker epsilon. What is accurate enough to
