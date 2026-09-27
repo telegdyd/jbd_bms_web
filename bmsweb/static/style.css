@@ -127,6 +127,7 @@ select, input[type="search"], input[type="text"], textarea, button.pill {
 button.pill { cursor: pointer; }
 button.pill:hover { background: var(--surface-2); }
 button.pill.on { border-color: var(--accent); color: var(--accent); }
+button.pill.danger:hover { border-color: var(--spread); color: var(--spread); }
 
 /* Session list */
 .rows { display: flex; flex-direction: column; gap: 8px; }

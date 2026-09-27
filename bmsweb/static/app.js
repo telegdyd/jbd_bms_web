@@ -345,6 +345,18 @@ async function detailView(root, id) {
     if (event.key === 'Enter') { event.preventDefault(); title.blur(); }
   });
 
+  async function remove() {
+    const what = session.is_ride ? 'ride' : 'session';
+    if (!window.confirm(`Delete this ${what}? The original CSV goes to the trash directory.`)) return;
+    saved.textContent = 'deleting…';
+    try {
+      await send('DELETE', `/sessions/${id}`);
+      location.hash = session.is_ride ? '#/rides' : '#/sessions';
+    } catch (error) {
+      saved.textContent = String(error.message || error);
+    }
+  }
+
   root.append(
     el('div', { class: 'detail-head' },
       el('div', {},
@@ -356,7 +368,8 @@ async function detailView(root, id) {
            `${session.sample_count} samples`].filter(Boolean).join(' · '), ' ', saved)),
       el('div', { class: 'controls' },
         el('a', { href: `${API}/sessions/${id}/raw.csv` },
-          el('button', { class: 'pill', type: 'button' }, 'Download CSV')))));
+          el('button', { class: 'pill', type: 'button' }, 'Download CSV')),
+        el('button', { class: 'pill danger', type: 'button', onclick: remove }, 'Delete'))));
 
   const tiles = summaryTiles(session, isEkd01);
   root.append(tiles);
