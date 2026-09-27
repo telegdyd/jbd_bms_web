@@ -57,6 +57,9 @@ Add a stack with the **Repository** method pointed at this repo; the compose fil
 no environment variables set. Portainer does **not** read `.env` from the repository, so set
 anything you want to change in the stack's own "Environment variables" box.
 
+To update, use **Pull and redeploy**. The compose file sets `pull_policy: build`, so every deploy
+rebuilds the image from the code it just pulled instead of restarting the old one.
+
 Two things are worth knowing, because both fail in the same confusing way — a container that
 restarts for ever while the stack cheerfully reports itself deployed:
 

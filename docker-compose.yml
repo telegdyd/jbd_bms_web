@@ -6,6 +6,10 @@ services:
   bmsweb:
     build: .
     image: bms-web:latest
+    # Rebuild on every deploy. Without this, Portainer's "Pull and redeploy" fetches the new code,
+    # finds a bms-web:latest already built, and starts the old image again. Unchanged layers still
+    # come from the cache, so a redeploy with no code changes is quick.
+    pull_policy: build
     restart: unless-stopped
 
     ports:
