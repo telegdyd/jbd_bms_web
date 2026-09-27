@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import companions
+from .. import altitude, companions, effort, profile
 from ..companions import AttachStatus
 from ..config import Settings
 from ..db import transaction
@@ -19,6 +20,7 @@ from ..ingest import IngestStatus, ingest, delete as delete_session, sha256_of
 from ..parse import BmsSample
 from ..simplify import located, simplify
 from ..splits import splits as compute_splits
+from ..terrain import Terrain
 from . import deps
 
 router = APIRouter(prefix="/sessions")
@@ -32,7 +34,7 @@ SERIES_FIELDS = {
 
 #: Chartable alongside them, but they come from an attached companion file rather than from the
 #: recording, so they are resolved separately and on their own clock.
-CHARTABLE = SERIES_FIELDS | set(companions.CHANNELS)
+CHARTABLE = SERIES_FIELDS | set(companions.CHANNELS) | {"rider_w"}
 
 #: What a session row returns in a list. Samples and polyline are not in it — a list of a hundred
 #: rides should be one small response.
@@ -371,6 +373,7 @@ def track(
 def session_splits(
     session_id: int,
     connection: sqlite3.Connection = Depends(deps.connection),
+    terrain: Terrain | None = Depends(deps.terrain),
     km: float = Query(default=1.0, gt=0.05, le=50.0),
 ) -> dict:
     row = _require(connection, session_id)
@@ -380,11 +383,138 @@ def session_splits(
         return {"id": session_id, "km": km, "splits": []}
 
     samples = _samples_of(connection, session_id)
+    rider = _rider_power(connection, row, samples, terrain)
     return {
         "id": session_id,
         "km": km,
-        "splits": [s.as_dict() for s in compute_splits(samples, row["gap_threshold_ms"], km)],
+        "splits": [
+            s.as_dict()
+            for s in compute_splits(
+                samples, row["gap_threshold_ms"], km, rider.watts if rider else None
+            )
+        ],
     }
+
+
+# ---------------------------------------------------------------------- the rider's side
+
+
+@router.get("/{session_id}/effort")
+def session_effort(
+    session_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    terrain: Terrain | None = Depends(deps.terrain),
+) -> dict:
+    """
+    The rider's share of the work, time in heart rate zones, and calories. Computed on each request
+    from the samples, the profile and the elevation map, so a corrected weight applies to every ride
+    at once. Each part is null with a reason beside it when what it needs is missing.
+    """
+    row = _require(connection, session_id)
+    rider_profile = profile.load(connection)
+    year = _year_of(row)
+    samples = _samples_of(connection, session_id)
+    gap = row["gap_threshold_ms"]
+    body: dict = {
+        "id": session_id,
+        "profile_missing": [
+            name
+            for name, value in (
+                ("weight_kg", rider_profile.weight_kg),
+                ("birth_year", rider_profile.birth_year),
+            )
+            if value is None
+        ],
+    }
+
+    # -- the work
+    routed = bool(row["has_location"]) and row["kind"] == "bms"
+    heights, source = altitude.heights(samples, terrain) if routed else ([], None)
+    body["altitude_source"] = source
+    body["rider"] = None
+    if not routed:
+        body["rider_unavailable"] = "no_route"
+    elif source is None:
+        body["rider_unavailable"] = "no_heights"
+    elif rider_profile.total_mass_kg is None:
+        body["rider_unavailable"] = "profile"
+    else:
+        mass = rider_profile.total_mass_kg
+        low, mid, high = (
+            effort.rider_power(samples, heights, mass, gap, a)
+            for a in effort.assumptions(rider_profile.tyres)
+        )
+        body["rider"] = {
+            "mass_kg": mass,
+            "rider_wh": round(mid.rider_wh, 1),
+            "rider_wh_low": round(low.rider_wh, 1),
+            "rider_wh_high": round(high.rider_wh, 1),
+            "motor_wh": round(mid.motor_wh, 1),
+            "share": mid.share,
+            "share_low": low.share,
+            "share_high": high.share,
+            "average_w": mid.average_w,
+            "moving_s": mid.moving_s,
+        }
+
+    # -- the heart
+    measured = any(s.heart_rate_bpm is not None for s in samples)
+    resolved = profile.max_hr(connection, rider_profile, year)
+    body["zones"] = None
+    if not measured:
+        body["zones_unavailable"] = "no_heart_rate"
+    elif resolved is None:
+        body["zones_unavailable"] = "profile"
+    else:
+        body["zones"] = {
+            "max_hr": round(resolved[0]),
+            "max_hr_source": resolved[1],
+            "bounds": effort.zone_bounds(resolved[0]),
+            "seconds": effort.zone_seconds(samples, resolved[0], gap),
+        }
+
+    age = rider_profile.age_in(year)
+    body["calories"] = None
+    if not measured:
+        body["calories_unavailable"] = "no_heart_rate"
+    elif rider_profile.weight_kg is None or age is None:
+        body["calories_unavailable"] = "profile"
+    else:
+        kcal = effort.calories(samples, rider_profile.weight_kg, age, rider_profile.sex, gap)
+        body["calories"] = {
+            "kcal": round(kcal) if kcal is not None else None,
+            "sex_given": rider_profile.sex is not None,
+        }
+
+    return body
+
+
+def _rider_power(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    samples: list[BmsSample],
+    terrain: Terrain | None,
+) -> effort.RiderPower | None:
+    """The middle estimate, for charts and splits; None when it cannot be made."""
+    if not row["has_location"] or row["kind"] != "bms":
+        return None
+    rider_profile = profile.load(connection)
+    if rider_profile.total_mass_kg is None:
+        return None
+    heights, source = altitude.heights(samples, terrain)
+    if source is None:
+        return None
+    _, mid, _ = effort.assumptions(rider_profile.tyres)
+    return effort.rider_power(
+        samples, heights, rider_profile.total_mass_kg, row["gap_threshold_ms"], mid
+    )
+
+
+def _year_of(row: sqlite3.Row) -> int:
+    try:
+        return int(row["local_date"][:4])
+    except (TypeError, ValueError):
+        return date.today().year
 
 
 def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSample]:
@@ -394,7 +524,8 @@ def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSamp
     """
     rows = connection.execute(
         """
-        SELECT t_ms, volts, amps, watts, soc, remaining_ah, lat, lon, alt_m, speed_kmh, accuracy_m, hr
+        SELECT t_ms, volts, amps, watts, soc, remaining_ah, lat, lon, alt_m, speed_kmh, accuracy_m,
+               hr, pressure_hpa
         FROM samples WHERE session_id = ? ORDER BY t_ms
         """,
         (session_id,),
@@ -414,6 +545,7 @@ def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSamp
             speed_kmh=row["speed_kmh"],
             accuracy_m=row["accuracy_m"],
             heart_rate_bpm=row["hr"],
+            pressure_hpa=row["pressure_hpa"],
         )
         for row in rows
     ]
@@ -423,6 +555,7 @@ def _samples_of(connection: sqlite3.Connection, session_id: int) -> list[BmsSamp
 def series(
     session_id: int,
     connection: sqlite3.Connection = Depends(deps.connection),
+    terrain: Terrain | None = Depends(deps.terrain),
     fields: str = Query(default="watts,volts,soc"),
     points: int = Query(default=2000, ge=10, le=20_000),
 ) -> dict:
@@ -444,6 +577,7 @@ def series(
 
     own = [f for f in requested if f in SERIES_FIELDS]
     attached = [f for f in requested if f in companions.CHANNELS]
+    derived = "rider_w" in requested
 
     # Heart rate the watch put in the recording is already on its clock, with nothing to line up,
     # so when there is one it is *the* heart rate and an attached GPX's is not consulted. Two traces
@@ -468,6 +602,15 @@ def series(
             "id": session_id, "t": [], "fields": {f: [] for f in requested}, "gaps": [],
             "sources": sources,
         }
+
+    if derived:
+        # Worked out from the samples rather than read from a column, then carried through the
+        # same bucketing as the rest, so a surge of effort survives being drawn small too.
+        samples = _samples_of(connection, session_id)
+        rider = _rider_power(connection, row, samples, terrain)
+        watts = effort.display_watts(samples, rider.watts) if rider else [None] * len(rows)
+        rows = [{**dict(r), "rider_w": w} for r, w in zip(rows, watts)]
+        own.append("rider_w")
 
     gaps = _gaps([r["t_ms"] for r in rows], row["gap_threshold_ms"])
 

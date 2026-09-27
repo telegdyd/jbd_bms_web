@@ -53,6 +53,9 @@ class BmsSample:
     #: From the watch, when one was measuring. The phone folds it in as the last column once the
     #: ride ends, so it is None for stretches the watch missed and for every older recording.
     heart_rate_bpm: int | None = None
+    #: Air pressure from the watch's barometer, folded in the same way. Only its changes matter:
+    #: they are a far steadier altitude than GPS gives, anchored to the ground by `altitude.py`.
+    pressure_hpa: float | None = None
 
     @property
     def has_location(self) -> bool:
@@ -144,6 +147,7 @@ def _parse_bms(header: list[str], rows: Iterable[str]) -> ParsedSession:
     accuracy_index = _index_of(header, "gps_accuracy_m")
     balance_index = _index_of(header, "balance_bits")
     heart_rate_index = _index_of(header, "hr_bpm")
+    pressure_index = _index_of(header, "pressure_hpa")
 
     samples: list[BmsSample] = []
     tz_offset_min: int | None = None
@@ -188,6 +192,7 @@ def _parse_bms(header: list[str], rows: Iterable[str]) -> ParsedSession:
                 accuracy_m=_to_float(_at(c, accuracy_index)),
                 balance_bits=_to_int(_at(c, balance_index)),
                 heart_rate_bpm=_to_int(_at(c, heart_rate_index)),
+                pressure_hpa=_to_float(_at(c, pressure_index)),
             )
         )
 

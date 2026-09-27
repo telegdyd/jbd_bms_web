@@ -5,7 +5,8 @@ recordings over the home wifi; this service parses them, keeps the originals, an
 Strava-style browser for rides and battery sessions on the LAN.
 
 Nothing is exposed to the internet: the container binds to the home interface only, and uploads
-carry a bearer token.
+carry a bearer token. The one thing it fetches is an elevation tile the first time a ride needs
+one — see [below](#your-effort).
 
 ## Status
 
@@ -16,6 +17,9 @@ also be loaded straight off disk with `bmsctl import`.
 Plus heart rate, from either of two places: the Wear OS app, which the phone writes straight into
 the recording, or a GPX exported from Strava and attached to the recording it belongs to. See
 [below](#heart-rate).
+
+And the rider's side of a ride: how much of the work was theirs rather than the motor's, time in
+heart rate zones, and calories. See [below](#your-effort).
 
 The phone side has been built and unit-tested, and its requests were checked against a live server,
 but it has not yet run on an actual phone.
@@ -33,7 +37,11 @@ but it has not yet run on an actual phone.
 | `bmsweb/gpx.py` | GPX → points. Heart rate out of a Strava export. |
 | `bmsweb/align.py` | Measuring the offset between two devices' clocks. |
 | `bmsweb/companions.py` | Attaching a GPX to a recording, and serving its channels. |
-| `bmsweb/api/` | The v1 API: health, sessions, companions, stats, pack. |
+| `bmsweb/terrain.py` | Ground height under a point, from SRTM elevation tiles. |
+| `bmsweb/altitude.py` | Which height to believe: barometer, elevation map or GPS. |
+| `bmsweb/effort.py` | The rider's power, heart rate zones, calories. |
+| `bmsweb/profile.py` | The rider: weight, age and the rest those need. |
+| `bmsweb/api/` | The v1 API: health, sessions, companions, stats, pack, profile. |
 | `bmsweb/static/` | The frontend: dashboard, lists, ride detail. No build step. |
 | `bmsweb/cli.py` | `summarise`, `import`, `reparse`, `attach`. |
 
@@ -100,6 +108,9 @@ mapping or the host firewall. If you see a message about uid 10001 instead, it i
 | `GET /api/v1/sessions/{id}/companions` | What is attached, with its heart rate figures. |
 | `PATCH /api/v1/sessions/{id}/companions/{cid}` | `offset_ms`, or `realign` to measure it again. |
 | `DELETE /api/v1/sessions/{id}/companions/{cid}` | Detach; the GPX moves to `data/trash/`. |
+| `GET /api/v1/sessions/{id}/effort` | The rider's share of the work, zones and calories. |
+| `GET /api/v1/profile` | The rider profile, with the maximum heart rate and zones in use. |
+| `PUT /api/v1/profile` | Replace it. |
 | `GET /api/v1/stats` | Totals and per-day buckets for the dashboard. |
 
 Interactive docs at `/docs` while the service is running.
@@ -148,6 +159,39 @@ wrong. A recording too short or too stationary to match on is attached unshifted
 
 Note **Export GPX**, not **Export Original**: the original is a FIT file, which this does not read.
 And a GPX only carries a heart rate if the activity was recorded with one.
+
+### Your effort
+
+Fill in **You** in the sidebar — weight and year of birth are the two that matter — and every ride
+page gains a **Your effort** card: your work in watt-hours against the motor's, your share, your
+average power, time in heart rate zones and calories. Your power is charted too, and each split
+gets a column for it. Nothing is stored: the figures are worked out whenever a ride is opened, so
+a corrected weight applies to every ride at once.
+
+**Your power** is what the ride needed beyond what the motor gave. Moving the bike takes rolling
+resistance, air, climbing and speeding up, all of which follow from the route, the speed, the
+heights and the mass; the pack says what the motor drew, and about 80 % of that reaches the
+road. The rest was you. It is an estimate, and shown as one, with a range from running the model
+with its constants set low and high. On a slope steep enough to carry you, you count as coasting.
+The hard work of holding on down a trail is not power into the bike, so it is not in this figure —
+the heart rate and the calories do count it. The reasoning, and what was tried on real rides to get
+there, is at the top of `bmsweb/effort.py`.
+
+**The heights** come from an elevation map (SRTM, about 30 m resolution), because a phone's GPS
+altitude is not good enough to measure climbing with. The first time a ride needs a tile, the
+server fetches it — about 7 MB per 1°×1° square, from the public `elevation-tiles-prod` bucket on
+AWS — and keeps it in `data/dem/`; after that it works offline. The request names only the
+square. Set `BMS_DEM_URL=off` to never fetch; tiles copied into `data/dem/` by hand still work, and
+without any, GPS altitude is used and the page says so.
+
+When the watch starts sending its barometer (a `pressure_hpa` column, see
+[docs/csv-format.md](docs/csv-format.md)), those rides use it for the shape of each climb and the
+map for its level. Nothing needs changing here for that.
+
+**Zones** are fractions of your maximum heart rate: the one you set if you know it; otherwise
+estimated from your age as 208 − 0.7 × age, raised to the highest heart rate you have actually
+recorded if that is higher. **Calories** use the Keytel heart rate equations — ±20–30 % for any
+one person.
 
 ### After changing how a figure is computed
 

@@ -87,3 +87,22 @@ def test_a_blank_token_is_no_token(monkeypatch):
     monkeypatch.setenv("BMS_UPLOAD_TOKEN", "   ")
 
     assert load_settings().auth_required is False
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, "https://s3.amazonaws.com/elevation-tiles-prod/skadi"),
+        # What the compose file passes when nothing is set. It must not mean "off".
+        ("", "https://s3.amazonaws.com/elevation-tiles-prod/skadi"),
+        ("off", None),
+        ("OFF", None),
+        ("https://mirror.lan/skadi", "https://mirror.lan/skadi"),
+    ],
+)
+def test_elevation_tiles_are_fetched_unless_switched_off(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("BMS_DEM_URL", raising=False)
+    else:
+        monkeypatch.setenv("BMS_DEM_URL", value)
+    assert load_settings().dem_url == expected

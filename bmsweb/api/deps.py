@@ -9,10 +9,15 @@ from typing import Iterator
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from ..config import Settings, settings as load
+from ..terrain import Terrain
 
 
 def settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def terrain(request: Request) -> Terrain | None:
+    return getattr(request.app.state, "terrain", None)
 
 
 def connection(request: Request) -> Iterator[sqlite3.Connection]:
@@ -41,4 +46,4 @@ def require_token(
         )
 
 
-__all__ = ["connection", "load", "require_token", "settings"]
+__all__ = ["connection", "load", "require_token", "settings", "terrain"]

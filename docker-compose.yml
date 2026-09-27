@@ -36,6 +36,9 @@ services:
       BMS_MAX_UPLOAD_MB: "${BMS_MAX_UPLOAD_MB:-256}"
       # Only affects log timestamps; recordings carry their own UTC offset.
       TZ: "${TZ:-Europe/Budapest}"
+      # Where elevation tiles are fetched from, once each, for the rider's share of a ride. Empty
+      # uses the public SRTM tiles on AWS; "off" never fetches and uses only tiles in /data/dem.
+      BMS_DEM_URL: "${BMS_DEM_URL:-}"
 
 # No container_name: it stops the stack being redeployed while an old container of that name is
 # still around, which is a confusing failure for something that buys nothing.

@@ -258,8 +258,8 @@ def _insert(
             session_id, t_ms, volts, amps, watts, soc, remaining_ah,
             delta_mv, min_cell_mv, max_cell_mv,
             lat, lon, alt_m, speed_kmh, accuracy_m,
-            cells_mv, temps_c, balance_bits, extra, hr
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            cells_mv, temps_c, balance_bits, extra, hr, pressure_hpa
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (_sample_row(new_id, sample) for sample in session.samples),
     )
@@ -288,6 +288,7 @@ def _sample_row(session_id: int, sample: BmsSample | Ekd01Sample) -> tuple:
                 }
             ),
             None,
+            None,
         )
 
     return (
@@ -301,6 +302,7 @@ def _sample_row(session_id: int, sample: BmsSample | Ekd01Sample) -> tuple:
         sample.balance_bits,
         None,
         sample.heart_rate_bpm,
+        sample.pressure_hpa,
     )
 
 

@@ -63,6 +63,26 @@ async function patch(path, body) {
   return response.json();
 }
 
+async function put(path, body) {
+  const response = await fetch(API + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    // A field out of range comes back as a list saying which; that is worth showing.
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      detail = Array.isArray(body.detail)
+        ? body.detail.map((d) => `${d.loc[d.loc.length - 1]}: ${d.msg}`).join('; ')
+        : body.detail || detail;
+    } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
 /* Uploads report their own failures in the body — "no timestamped track points in that file" is
  * the whole point of the message, and a bare status code would waste it. */
 async function send(method, path, body) {
@@ -754,6 +774,9 @@ async function drawHeatmap(host) {
 
 const CHANNELS = [
   { field: 'watts', name: 'Power', unit: 'W', colour: '--power', digits: 0, fill: true, rider: true },
+  /* Worked out by the server from the route, the heights and the pack's output; null without a
+   * profile weight, and then not drawn. */
+  { field: 'rider_w', name: 'Your power', unit: 'W', colour: '--rider', digits: 0, fill: true, note: 'estimated' },
   { field: 'speed_kmh', name: 'Speed', unit: 'km/h', colour: '--speed', digits: 1 },
   /* From the watch, in the recording itself; failing that, from an attached GPX. Asked for
    * unconditionally: the server answers with nulls when there is neither, and a chart of nulls is
@@ -857,6 +880,11 @@ async function detailView(root, id) {
       `${fmt.duration(session.gap_ms / 1000)}. Their watt-hours are left out of the totals, not guessed.`));
   }
 
+  // The rider's side: filled in once the effort figures arrive, and left out entirely for a
+  // recording that has neither a route nor a heart rate to say anything about.
+  const effortHost = el('section', { class: 'card', hidden: true });
+  page.append(effortHost);
+
   const chartHost = el('div', {});
   page.append(el('section', { class: 'card' },
     el('div', { class: 'section-head' },
@@ -899,12 +927,14 @@ async function detailView(root, id) {
 
   const wanted = CHANNELS.filter(
     (c) => (isEkd01 ? ['speed_kmh', 'soc'].includes(c.field) : true) || c.companion);
-  const [track, series, splitBody, companions] = await Promise.all([
+  const [track, series, splitBody, companions, effortBody] = await Promise.all([
     onMap ? get(`/sessions/${id}/track`) : Promise.resolve(null),
     get(`/sessions/${id}/series?fields=${wanted.map((c) => c.field).join(',')}&points=3000`),
     onMap ? get(`/sessions/${id}/splits`) : Promise.resolve(null),
     get(`/sessions/${id}/companions`),
+    get(`/sessions/${id}/effort`),
   ]);
+  drawEffort(effortHost, effortBody);
 
   const marker = onMap ? drawRideMap(mapParts, track) : null;
   const onStrip = onMap ? drawProfile(mapParts, series, wanted.filter((c) => c.rider), session, marker) : [];
@@ -998,6 +1028,214 @@ function summaryTiles(session, isEkd01) {
   }
 
   return el('div', { class: 'tiles' }, tiles);
+}
+
+/* --------------------------------------------------------------------- effort */
+
+const ALTITUDE_SOURCES = {
+  barometer: 'Heights from the watch\'s barometer, levelled against the elevation map.',
+  terrain: 'Heights from the elevation map under the route (SRTM, ~30 m).',
+  gps: 'Heights from GPS altitude — the elevation map was not available, so treat this loosely.',
+};
+
+const ZONE_NAMES = ['Easy', 'Endurance', 'Tempo', 'Threshold', 'Maximum'];
+
+function pct(fraction) { return `${Math.round(fraction * 100)}`; }
+
+/* The rider's side of the ride, from /effort. Every part is optional: a ride with no route still
+ * has zones, a profile with no year of birth still has a share of the work. What is missing says
+ * so, with the one thing that would fill it in. */
+function drawEffort(host, body) {
+  const { rider, zones, calories } = body;
+  const needsProfile = body.profile_missing.length > 0 && (
+    body.rider_unavailable === 'profile' || body.zones_unavailable === 'profile' ||
+    body.calories_unavailable === 'profile');
+  if (!rider && !zones && !calories && !needsProfile) return;
+
+  const parts = [];
+
+  if (rider) {
+    const tiles = [
+      rangeTile('Your work', rider.rider_wh.toFixed(0), 'Wh',
+        `${rider.rider_wh_low.toFixed(0)}–${rider.rider_wh_high.toFixed(0)} Wh`),
+      rangeTile('Your share', pct(rider.share), '%',
+        `${pct(rider.share_low)}–${pct(rider.share_high)} %`),
+    ];
+    if (rider.average_w !== null) {
+      tiles.push(rangeTile('Your average', rider.average_w.toFixed(0), 'W', 'while moving'));
+    }
+    tiles.push(rangeTile('Motor', rider.motor_wh.toFixed(0), 'Wh', 'into the wheel'));
+    if (calories && calories.kcal !== null) {
+      tiles.push(rangeTile('Calories', calories.kcal, 'kcal', 'from heart rate'));
+    }
+
+    const share = Math.max(0, Math.min(1, rider.share || 0));
+    parts.push(el('div', { class: 'tiles' }, tiles));
+    parts.push(el('div', { class: 'share' },
+      el('div', { class: 'bar-pair', role: 'img', 'aria-label': `You ${pct(share)} %, motor ${pct(1 - share)} %` },
+        el('i', { style: `width:${share * 100}%;background:${css('--rider')}` }),
+        el('i', { style: `width:${(1 - share) * 100}%;background:${css('--power')}` })),
+      el('div', { class: 'keys' },
+        el('span', {}, el('i', { class: 'key-dot', style: `background:${css('--rider')}` }), 'You ',
+          el('b', {}, `${rider.rider_wh.toFixed(1)} Wh`)),
+        el('span', {}, el('i', { class: 'key-dot', style: `background:${css('--power')}` }), 'Motor ',
+          el('b', {}, `${rider.motor_wh.toFixed(1)} Wh`)))));
+  } else if (calories && calories.kcal !== null) {
+    parts.push(el('div', { class: 'tiles' }, rangeTile('Calories', calories.kcal, 'kcal', 'from heart rate')));
+  }
+
+  if (zones) parts.push(zoneBar(zones));
+
+  const fine = [];
+  if (rider) {
+    fine.push(`${ALTITUDE_SOURCES[body.altitude_source] || ''} Worked out from ${rider.mass_kg.toFixed(0)} kg ` +
+      'of rider and bike, the pack\'s output and the physics of rolling, air and climbing; the range ' +
+      'covers plausible tyres, drag and drivetrain losses. Where the slope alone carries you, you ' +
+      'count as coasting — so effort that is not pedalling, like holding on down a trail, is not in it.');
+  }
+  if (calories && calories.kcal !== null) {
+    fine.push(`Calories from heart rate (Keytel)${calories.sex_given ? '' : ', averaged over both sexes'}; ` +
+      'expect ±20–30 %.');
+  }
+  if (zones) {
+    const from = { set: 'as you set it', recorded: 'the highest you have recorded', age: 'estimated from your age' }[zones.max_hr_source];
+    fine.push(`Zones against a maximum of ${zones.max_hr} bpm, ${from}.`);
+  }
+
+  if (needsProfile) {
+    const wants = body.profile_missing.map((f) => ({ weight_kg: 'weight', birth_year: 'year of birth' }[f]));
+    parts.push(el('div', { class: 'notice' }, icon('info'),
+      el('span', {}, `Add your ${wants.join(' and ')} `, el('a', { href: '#/profile' }, 'on your profile'),
+        body.rider_unavailable === 'profile'
+          ? ' to see how much of this ride was you, and what it cost.'
+          : ' for heart rate zones and calories.')));
+  }
+  if (fine.length) {
+    parts.push(el('p', { class: 'fine' }, fine.join(' '), ' ', el('a', { href: '#/profile' }, 'Your profile →')));
+  }
+
+  host.replaceChildren(
+    el('div', { class: 'section-head' }, el('h2', {}, 'Your effort'),
+      el('span', { class: 'hint' }, rider ? 'estimated' : '')),
+    el('div', { class: 'effort' }, parts));
+  host.hidden = false;
+}
+
+function rangeTile(label, value, unit, range) {
+  const node = tile(label, value, unit);
+  if (range) node.append(el('div', { class: 'range' }, range));
+  return node;
+}
+
+function zoneBar(zones) {
+  const total = zones.seconds.reduce((a, b) => a + b, 0) || 1;
+  const edges = [null, ...zones.bounds, null];
+  const colour = (i) => css(`--z${i + 1}`);
+  return el('div', { class: 'zones' },
+    el('div', { class: 'head' }, el('b', {}, 'Heart rate zones'), el('span', {}, `max ${zones.max_hr} bpm`)),
+    el('div', { class: 'bar-pair', role: 'img', 'aria-label': 'Time in heart rate zones' },
+      zones.seconds.map((s, i) => s
+        ? el('i', { style: `width:${(s / total) * 100}%;background:${colour(i)}`, title: ZONE_NAMES[i] })
+        : null)),
+    el('div', { class: 'keys' },
+      zones.seconds.map((s, i) => el('span', {
+        title: edges[i] === null ? `below ${edges[i + 1]} bpm`
+          : edges[i + 1] === null ? `${edges[i]} bpm and above` : `${edges[i]}–${edges[i + 1] - 1} bpm`,
+      },
+      el('i', { class: 'key-dot', style: `background:${colour(i)}` }),
+      `Z${i + 1} ${ZONE_NAMES[i]} `, el('b', {}, fmt.duration(s))))));
+}
+
+/* ---------------------------------------------------------------- profile */
+
+async function profileView(root) {
+  const body = await get('/profile');
+  const status = el('span', { class: 'saving' });
+
+  const number = (name, attrs) => el('input', {
+    type: 'number', name, value: body[name] ?? '', ...attrs,
+  });
+  const choice = (name, options, fallback) => {
+    const select = el('select', { name },
+      options.map(([value, label]) => el('option', { value }, label)));
+    select.value = body[name] ?? fallback;
+    return select;
+  };
+
+  const fields = {
+    weight_kg: number('weight_kg', { min: 25, max: 250, step: '0.1', placeholder: 'kg' }),
+    birth_year: number('birth_year', { min: 1900, max: new Date().getFullYear(), step: '1', placeholder: 'e.g. 1990' }),
+    sex: choice('sex', [['', 'Not given'], ['male', 'Male'], ['female', 'Female']], ''),
+    bike_kg: number('bike_kg', { min: 5, max: 100, step: '0.1', placeholder: String(body.defaults.bike_kg) }),
+    tyres: choice('tyres', [['road', 'Road — smooth and hard'], ['mixed', 'Mixed — some gravel and trail'], ['offroad', 'Off-road — knobbly, mostly trail']], body.defaults.tyres),
+    max_hr: number('max_hr', { min: 100, max: 230, step: '1', placeholder: body.max_hr_used ? `${body.max_hr_used} (estimated)` : 'bpm' }),
+  };
+
+  const field = (label, input, help) => el('label', {}, label, input, help ? el('small', {}, help) : null);
+
+  async function save(event) {
+    event.preventDefault();
+    const value = (name) => fields[name].value.trim();
+    const numeric = (name) => (value(name) === '' ? null : Number(value(name)));
+    status.textContent = 'saving…';
+    try {
+      await put('/profile', {
+        weight_kg: numeric('weight_kg'),
+        birth_year: numeric('birth_year'),
+        sex: value('sex') || null,
+        bike_kg: numeric('bike_kg'),
+        tyres: value('tyres') || null,
+        max_hr: numeric('max_hr'),
+      });
+      route();
+    } catch (error) {
+      status.textContent = String(error.message || error);
+    }
+  }
+
+  const derived = [];
+  if (body.max_hr_used) {
+    const why = {
+      set: 'as you set it',
+      recorded: 'the highest your rides have recorded, which is above the estimate for your age',
+      age: `estimated from your age (208 − 0.7 × ${body.age}); it can be ±10 bpm off for any one person`,
+    }[body.max_hr_source];
+    derived.push(el('p', { style: 'margin:0' }, 'Maximum heart rate in use: ',
+      el('b', {}, `${body.max_hr_used} bpm`), `, ${why}.`,
+      body.max_hr_recorded ? ` Highest recorded so far: ${body.max_hr_recorded} bpm.` : ''));
+    const edges = [null, ...body.zone_bounds, null];
+    derived.push(el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Zone'), el('th', {}, 'bpm'))),
+      el('tbody', {}, ZONE_NAMES.map((name, i) => el('tr', {},
+        el('td', {}, el('i', { class: 'key-dot', style: `background:${css(`--z${i + 1}`)}` }), `Z${i + 1} ${name}`),
+        el('td', {}, edges[i] === null ? `< ${edges[i + 1]}`
+          : edges[i + 1] === null ? `${edges[i]} +` : `${edges[i]}–${edges[i + 1] - 1}`))))));
+  } else {
+    derived.push(el('p', { class: 'sub', style: 'margin:0' },
+      'Add your year of birth, or a maximum heart rate you know, for heart rate zones.'));
+  }
+
+  root.append(el('div', { class: 'stack' },
+    el('div', {},
+      el('h1', {}, 'You'),
+      el('p', { class: 'sub' }, 'What the rider-side figures need. Everything is optional; each figure ' +
+        'says what it is missing. Changes apply to every ride at once.')),
+    el('form', { class: 'card stack', onsubmit: save },
+      el('div', { class: 'section-head' }, el('h2', {}, 'Rider')),
+      el('div', { class: 'profile-form' },
+        field('Weight (kg)', fields.weight_kg, 'For your share of the work, and calories.'),
+        field('Year of birth', fields.birth_year, 'For the heart rate estimate and calories.'),
+        field('Sex', fields.sex, 'Only the calorie formula uses it; without it, both are averaged.'),
+        field('Maximum heart rate', fields.max_hr, 'Leave empty unless you have measured it.')),
+      el('div', { class: 'section-head' }, el('h2', {}, 'Bike')),
+      el('div', { class: 'profile-form' },
+        field('Bike weight (kg)', fields.bike_kg, `With the battery. Empty uses ${body.defaults.bike_kg} kg.`),
+        field('Tyres', fields.tyres, 'Sets the rolling resistance the estimate starts from.')),
+      el('div', { class: 'controls' },
+        el('button', { class: 'pill', type: 'submit' }, 'Save'), status)),
+    el('section', { class: 'card derived' },
+      el('div', { class: 'section-head' }, el('h2', {}, 'Heart rate zones')),
+      derived)));
 }
 
 /* ------------------------------------------------------------------- ride map */
@@ -1201,7 +1439,8 @@ function drawCharts(host, series, channels, marker) {
     const box = el('div', { class: 'chart' },
       el('div', { class: 'head' },
         el('span', { class: 'name' }, channel.name,
-          channel.companion ? el('small', {}, sourceNote(series, channel)) : null),
+          channel.companion ? el('small', {}, sourceNote(series, channel)) : null,
+          channel.note ? el('small', {}, channel.note) : null),
         reading));
     host.append(box);
 
@@ -1276,6 +1515,7 @@ function drawSplits(host, body, topSpeed) {
 
   const fastest = Math.max(...body.splits.map((s) => s.avg_speed_kmh || 0), 1);
   const withHr = body.splits.some((s) => s.avg_hr_bpm !== null && s.avg_hr_bpm !== undefined);
+  const withRider = body.splits.some((s) => s.rider_wh !== null && s.rider_wh !== undefined);
 
   const rows = body.splits.map((split) => {
     const partial = split.distance_km < body.km * 0.95;
@@ -1293,6 +1533,7 @@ function drawSplits(host, body, topSpeed) {
             `background:${speedColour(speed / (topSpeed || fastest))}`,
         }))),
       el('td', {}, split.discharged_wh.toFixed(1)),
+      withRider ? el('td', { class: 'rider' }, split.rider_wh.toFixed(1)) : null,
       el('td', { class: 'eff' }, split.distance_km > 0.05
         ? (split.discharged_wh / split.distance_km).toFixed(1) : '—'),
       withHr ? el('td', { class: 'hr' }, split.avg_hr_bpm ?? '—') : null,
@@ -1303,7 +1544,9 @@ function drawSplits(host, body, topSpeed) {
   host.append(el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, 'km'), el('th', {}, 'Time'), el('th', {}, 'km/h'), el('th', {}, ''),
-      el('th', {}, 'Wh'), el('th', {}, 'Wh/km'), withHr ? el('th', {}, 'bpm') : null,
+      el('th', { title: 'Drawn from the pack' }, 'Wh'),
+      withRider ? el('th', { title: 'Your own work, estimated' }, 'You Wh') : null,
+      el('th', {}, 'Wh/km'), withHr ? el('th', {}, 'bpm') : null,
       el('th', {}, 'Δ alt'))),
     tbody));
 
@@ -1469,6 +1712,7 @@ const ROUTES = [
     blurb: 'Everything recorded, including bench and solar sessions with no route.',
   })],
   [/^\/session\/(\d+)$/, (root, id) => detailView(root, id)],
+  [/^\/profile$/, (root) => profileView(root)],
 ];
 
 async function route() {

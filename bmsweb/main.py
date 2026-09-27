@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import api, db
 from .config import Settings, load_settings
+from .terrain import Terrain
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -38,6 +39,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.settings = config
         app.state.db = db.Database(config.database_path)
+        # One for the service, so a tile read once serves every page view after it.
+        app.state.terrain = Terrain(config.dem_dir, config.dem_url)
 
         # Printed on every start so the container log answers the first question anyone asks of a
         # service they cannot reach: is it actually up, and with what settings?
@@ -48,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log.info("  data      %s", config.data_dir)
         log.info("  sessions  %d", sessions)
         log.info("  auth      %s", "on" if config.auth_required else "off (no token set)")
+        log.info("  terrain   %s", config.dem_url or "local tiles only")
 
         try:
             yield

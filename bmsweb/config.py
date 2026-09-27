@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from .terrain import DEFAULT_URL as DEFAULT_DEM_URL
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -29,6 +31,11 @@ class Settings:
     #: Rejected above this, so a wrong URL pointed at this service cannot fill the disk.
     max_upload_bytes: int
 
+    #: Where elevation tiles are fetched from the first time a ride needs one; None never fetches,
+    #: and only tiles already in `dem_dir` are used. Off unless configured, so that nothing — the
+    #: tests least of all — reaches the internet by accident; `load_settings` turns it on.
+    dem_url: str | None = None
+
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
@@ -42,6 +49,11 @@ class Settings:
     def trash_dir(self) -> Path:
         """Deleted recordings land here rather than being unlinked. Disk is cheap; rides are not."""
         return self.data_dir / "trash"
+
+    @property
+    def dem_dir(self) -> Path:
+        """Elevation tiles, kept once fetched. Derived data: deleting it costs a download."""
+        return self.data_dir / "dem"
 
     @property
     def database_path(self) -> Path:
@@ -86,10 +98,15 @@ class Settings:
 
 def load_settings() -> Settings:
     token = os.environ.get("BMS_UPLOAD_TOKEN", "").strip()
+    # Empty is the default, not "off": the compose file passes the variable through empty when it
+    # is not set, and that must not quietly switch the elevation map off.
+    dem_url = os.environ.get("BMS_DEM_URL", "").strip() or DEFAULT_DEM_URL
     return Settings(
         data_dir=Path(os.environ.get("BMS_DATA_DIR", "./data")).resolve(),
         upload_token=token or None,
         max_upload_bytes=int(os.environ.get("BMS_MAX_UPLOAD_MB", "256")) * 1024 * 1024,
+        # "off" for a service that must never reach out; tiles dropped into data/dem still work.
+        dem_url=None if dem_url.lower() in ("off", "none") else dem_url,
     )
 
 

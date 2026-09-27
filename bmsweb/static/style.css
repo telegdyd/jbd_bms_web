@@ -33,6 +33,14 @@
   /* Companion channels, from an attached GPX rather than from the pack. */
   --hr: #ff6b8b;
   --cadence: #4fd1c5;
+  /* The rider's own power, estimated: the one trace that is them rather than the bike. */
+  --rider: #a3e635;
+  /* Heart rate zones, in the order every watch uses: easy grey through to red. */
+  --z1: #6b7280;
+  --z2: #60a5fa;
+  --z3: #4ade80;
+  --z4: #fbbf24;
+  --z5: #f87171;
 
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
@@ -67,6 +75,12 @@
   --spread: #dc2626;
   --hr: #db2777;
   --cadence: #0d9488;
+  --rider: #4d7c0f;
+  --z1: #9ca3af;
+  --z2: #2563eb;
+  --z3: #16a34a;
+  --z4: #d97706;
+  --z5: #dc2626;
 }
 
 * { box-sizing: border-box; }
@@ -414,6 +428,7 @@ td:first-child { color: var(--muted); }
 td.eff { color: var(--power); }
 td.alt { color: var(--muted); }
 td.hr { color: var(--hr); }
+td.rider { color: var(--rider); }
 tbody tr:last-child td { border-bottom: none; }
 
 .bar { height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; }
@@ -463,6 +478,41 @@ tbody tr:last-child td { border-bottom: none; }
 input.offset { width: 72px; text-align: right; font-family: var(--mono); }
 
 .notes { width: 100%; min-height: 110px; resize: vertical; font-size: 14px; line-height: 1.5; background: var(--bg); }
+
+/* ------------------------------------------------------------------ effort */
+
+.effort { display: flex; flex-direction: column; gap: 18px; }
+.effort .tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.effort .tile .range { font: 12px var(--mono); color: var(--muted); margin-top: 4px; }
+
+/* One bar, two parts: the rider's share against the motor's. Proportions, so a bar and not a pie. */
+.share { display: flex; flex-direction: column; gap: 8px; }
+.share .bar-pair { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); }
+.share .bar-pair i { display: block; height: 100%; }
+.share .bar-pair i + i { box-shadow: -2px 0 0 var(--surface); }
+.share .keys, .zones .keys { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.share .keys b, .zones .keys b { color: var(--text); font: 500 13px var(--mono); }
+.key-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+
+.zones { display: flex; flex-direction: column; gap: 8px; }
+.zones .bar-pair { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); }
+.zones .bar-pair i { display: block; height: 100%; }
+.zones .bar-pair i + i { box-shadow: -2px 0 0 var(--surface); }
+.zones .head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.zones .head span { font-size: 12px; color: var(--muted); }
+
+.effort .fine { font-size: 12px; line-height: 1.55; color: var(--muted); margin: 0; }
+.effort .fine a { color: var(--accent); }
+
+/* ------------------------------------------------------------------ profile */
+
+.profile-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px 20px; }
+.profile-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.profile-form label small { font-weight: 400; color: var(--muted); line-height: 1.45; }
+.profile-form input, .profile-form select { min-height: 38px; font-size: 14px; }
+.derived { display: flex; flex-direction: column; gap: 10px; font-size: 14px; line-height: 1.5; }
+.derived table { max-width: 420px; }
+.derived td:first-child { color: var(--text); }
 
 /* ------------------------------------------------------------------ narrow screens */
 

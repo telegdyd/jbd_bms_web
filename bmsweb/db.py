@@ -135,6 +135,25 @@ SCHEMA = [
     ALTER TABLE sessions ADD COLUMN avg_hr_bpm INTEGER;
     ALTER TABLE sessions ADD COLUMN max_hr_bpm INTEGER;
     """,
+    # 4 — the rider, and the watch's barometer.
+    #
+    # One row, because there is one rider. Figures that depend on it — zones, calories, the rider's
+    # share of the work — are computed when a ride is looked at rather than stored, so a corrected
+    # weight changes every ride at once instead of needing a reparse.
+    """
+    CREATE TABLE profile (
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        weight_kg     REAL,
+        birth_year    INTEGER,
+        sex           TEXT,
+        bike_kg       REAL,
+        tyres         TEXT,
+        max_hr        INTEGER,
+        updated_at_ms INTEGER NOT NULL
+    );
+
+    ALTER TABLE samples ADD COLUMN pressure_hpa REAL;
+    """,
 ]
 
 

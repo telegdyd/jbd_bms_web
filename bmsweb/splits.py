@@ -37,6 +37,8 @@ class Split:
     altitude_change_m: float | None
     #: Mean of the watch's readings in the split; None where it measured nothing.
     avg_hr_bpm: int | None = None
+    #: The rider's own work in the split, when there is a rider power to sum (`effort.py`).
+    rider_wh: float | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -46,6 +48,7 @@ def splits(
     samples: Sequence[Sample],
     gap_threshold_ms: int,
     split_km: float = DEFAULT_SPLIT_KM,
+    rider_watts: Sequence[float | None] | None = None,
 ) -> list[Split]:
     if split_km <= 0 or len(samples) < 2:
         return []
@@ -67,6 +70,7 @@ def splits(
     last_alt: list[float | None] = [None] * count
     hr_sum = [0] * count
     hr_n = [0] * count
+    rider = [0.0] * count
 
     for i in range(len(samples) - 1):
         # The interval belongs to the split its *start* falls in. A boundary crossed mid-interval
@@ -85,6 +89,9 @@ def splits(
         duration_ms[bucket] += dt
         if (current.speed_kmh or 0.0) >= MOVING_SPEED_KMH:
             moving_ms[bucket] += dt
+
+        if rider_watts is not None and rider_watts[i] is not None:
+            rider[bucket] += rider_watts[i] * dt / 3_600_000.0
 
         watts = _mean_watts(current, following)
         if watts is not None:
@@ -119,6 +126,7 @@ def splits(
                 else None
             ),
             avg_hr_bpm=round(hr_sum[index] / hr_n[index]) if hr_n[index] else None,
+            rider_wh=rider[index] if rider_watts is not None else None,
         )
         for index in range(count)
         # A trailing sliver from the last few metres is noise, not a split worth a row.

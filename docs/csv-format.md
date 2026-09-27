@@ -22,7 +22,7 @@ of the file content instead.
 ```
 timestamp,elapsed_s,volts,amps,watts,soc_percent,remaining_ah,
 temp1_c…tempN_c,cell1_mv…cellN_mv,delta_mv,min_cell_mv,max_cell_mv,
-[latitude,longitude,altitude_m,speed_kmh,gps_accuracy_m,]balance_bits[,hr_bpm]
+[latitude,longitude,altitude_m,speed_kmh,gps_accuracy_m,]balance_bits[,hr_bpm][,pressure_hpa]
 ```
 
 | Column | Notes |
@@ -43,6 +43,20 @@ temp1_c…tempN_c,cell1_mv…cellN_mv,delta_mv,min_cell_mv,max_cell_mv,
 late, so they collect in a side file (`<recording>.csv.hr`) and `HeartRateLog.merge` folds them in
 as a last column once the ride stops. The phone holds the recording back from sync until that is
 done, so the server only ever sees the finished file.
+
+| Column | Notes |
+| --- | --- |
+| `pressure_hpa` | **Not written yet — reserved for the watch's barometer.** Station pressure in hectopascals, as the sensor reports it (Android `Sensor.TYPE_PRESSURE`), 2 decimals (0.01 hPa ≈ 8 cm). Not corrected to sea level: only its changes are used. Blank where there is no recent reading, as for `hr_bpm`. |
+
+The server is ready for `pressure_hpa` now. It is expected to arrive the way `hr_bpm` does, as
+another column folded in by the merge, but nothing depends on its position or on the two arriving
+together: columns are found by name. What it is used for, and why raw pressure rather than the
+watch's own altitude, is in `bmsweb/altitude.py` — in short, the barometer supplies the fine
+detail of the climb and the elevation map pins its level, which undoes the weather's drift.
+
+A ride uses the barometer once at least 80 % of its located rows have a pressure. Below that it
+falls back to the elevation map for the whole ride rather than mixing the two, because a switch of
+source part way through reads as a cliff.
 
 ## EKD01 recordings
 
