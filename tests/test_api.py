@@ -159,6 +159,19 @@ class TestTrack:
         assert point["watts"] == -360.0
         assert point["soc"] == 90
 
+    def test_power_on_a_segment_is_its_peak_over_every_sample(self, client, upload):
+        """
+        The drawn start point reads 360 W, but the stretch it begins pulled 720 W in fixes that
+        simplifying dropped. The segment is shaded by what it did, not by where it happened to start.
+        """
+        session_id = upload().json()["id"]
+
+        first, last = client.get(f"/api/v1/sessions/{session_id}/track").json()["points"]
+
+        assert first["watts"] == -360.0
+        assert first["peak_out_w"] == 720.0
+        assert last["peak_out_w"] == 720.0
+
     def test_an_unknown_detail_level_is_refused(self, client, upload):
         session_id = upload().json()["id"]
 

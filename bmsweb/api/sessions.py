@@ -344,6 +344,7 @@ def track(
 
     samples = _samples_of(connection, session_id)
     points = located(samples) if detail == "full" else simplify(samples)
+    peaks = _peak_output(samples, points)
 
     return {
         "id": session_id,
@@ -361,12 +362,35 @@ def track(
                 "alt_m": p.altitude_m,
                 "speed_kmh": p.speed_kmh,
                 "watts": p.watts,
+                "peak_out_w": peak,
                 "soc": p.soc,
                 "hr": p.heart_rate_bpm,
             }
-            for p in points
+            for p, peak in zip(points, peaks)
         ],
     }
+
+
+def _peak_output(samples: list[BmsSample], points: list[BmsSample]) -> list[float]:
+    """
+    The most the battery gave out between each drawn point and the next, over every sample in that
+    stretch — not just the fixes that survived simplifying. A hard start lasts a few seconds and
+    rarely lands on a kept point; without this the map's power shading loses exactly the moments
+    worth seeing, and tops out well short of the ride's own peak.
+    """
+    peaks = []
+    i = 0
+    for k, point in enumerate(points):
+        end = points[k + 1].at_ms if k + 1 < len(points) else point.at_ms + 1
+        while i < len(samples) and samples[i].at_ms < point.at_ms:
+            i += 1
+        lowest = 0.0
+        while i < len(samples) and samples[i].at_ms < end:
+            lowest = min(lowest, samples[i].watts)
+            i += 1
+        # `+ 0.0` normalises negative zero, as in the summary.
+        peaks.append(-lowest + 0.0)
+    return peaks
 
 
 @router.get("/{session_id}/splits")
