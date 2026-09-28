@@ -1242,7 +1242,9 @@ async function profileView(root) {
 
 const COLOUR_BY = {
   speed: { label: 'Speed', field: 'speed_kmh', unit: 'km/h' },
-  power: { label: 'Power', field: 'watts', unit: 'W' },
+  /* The battery counts discharge as negative watts, so the motor's output is shaded by its size;
+   * a stretch of regen or charging is shaded as no output at all. */
+  power: { label: 'Power', field: 'watts', unit: 'W', read: (w) => Math.max(-w, 0) },
   /* Scaled from the ride's lowest reading rather than from zero: a heart never goes near zero, and
    * against a zero floor 100 and 145 bpm are two shades of the same green. Offered only when the
    * watch measured something. */
@@ -1274,11 +1276,17 @@ function drawRideMap(parts, track) {
   const legend = el('div', { class: 'float legend' });
   const buttons = {};
 
-  const measured = (field) => points.map((p) => p[field]).filter((v) => v !== null && v !== undefined);
+  const valueAt = (option, point) => {
+    const value = point[option.field];
+    if (value === null || value === undefined) return null;
+    return option.read ? option.read(value) : value;
+  };
+  const measured = (option) => points.map((p) => valueAt(option, p)).filter((v) => v !== null);
 
   function colourBy(mode) {
-    const { field, unit, fromLowest } = COLOUR_BY[mode];
-    const values = measured(field);
+    const option = COLOUR_BY[mode];
+    const { unit, fromLowest } = option;
+    const values = measured(option);
     const top = values.length ? Math.max(...values) : 0;
     const bottom = fromLowest && values.length ? Math.min(...values) : 0;
     const span = Math.max(top - bottom, 1);
@@ -1286,9 +1294,9 @@ function drawRideMap(parts, track) {
 
     if (top > 0) {
       for (let i = 0; i < latlngs.length - 1; i++) {
-        const value = points[i][field];
+        const value = valueAt(option, points[i]);
         // A stretch the watch missed is left grey rather than painted as its calmest.
-        const missing = fromLowest && (value === null || value === undefined);
+        const missing = fromLowest && value === null;
         L.polyline([latlngs[i], latlngs[i + 1]], {
           color: missing ? css('--muted') : speedColour(((value ?? 0) - bottom) / span),
           weight: 5,
@@ -1309,7 +1317,7 @@ function drawRideMap(parts, track) {
 
   const tools = el('div', { class: 'float tools right' });
   for (const [key, option] of Object.entries(COLOUR_BY)) {
-    if (option.optional && !measured(option.field).length) continue;
+    if (option.optional && !measured(option).length) continue;
     buttons[key] = el('button', { type: 'button', onclick: () => colourBy(key) }, option.label);
     tools.append(buttons[key]);
   }
