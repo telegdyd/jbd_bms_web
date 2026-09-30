@@ -416,6 +416,7 @@ def _companion(connection: sqlite3.Connection, session_id: int, companion_id: in
 def track(
     session_id: int,
     connection: sqlite3.Connection = Depends(deps.connection),
+    terrain: Terrain | None = Depends(deps.terrain),
     detail: str = Query(default="drawn", pattern="^(drawn|full)$"),
 ) -> dict:
     """
@@ -432,7 +433,19 @@ def track(
 
     samples = _samples_of(connection, session_id)
     points = located(samples) if detail == "full" else simplify(samples)
-    peaks = _peak_output(samples, points)
+    # The motor's output is shaded by its size; a stretch of regen or charging as no output at all.
+    # `+ 0.0` normalises negative zero, as in the summary.
+    peaks = [
+        max(p or 0.0, 0.0) + 0.0 for p in _peaks(samples, points, [-s.watts for s in samples])
+    ]
+    # The rider's, as the chart draws it: second by second it is a comb, and its peaks would be the
+    # comb's teeth rather than the efforts.
+    rider = _rider_power(connection, row, samples, terrain)
+    rider_peaks = (
+        _peaks(samples, points, effort.display_watts(samples, rider.watts))
+        if rider
+        else [None] * len(points)
+    )
 
     return {
         "id": session_id,
@@ -451,20 +464,24 @@ def track(
                 "speed_kmh": p.speed_kmh,
                 "watts": p.watts,
                 "peak_out_w": peak,
+                "rider_w": rider_peak,
                 "soc": p.soc,
                 "hr": p.heart_rate_bpm,
             }
-            for p, peak in zip(points, peaks)
+            for p, peak, rider_peak in zip(points, peaks, rider_peaks)
         ],
     }
 
 
-def _peak_output(samples: list[BmsSample], points: list[BmsSample]) -> list[float]:
+def _peaks(
+    samples: list[BmsSample], points: list[BmsSample], values: list[float | None]
+) -> list[float | None]:
     """
-    The most the battery gave out between each drawn point and the next, over every sample in that
-    stretch — not just the fixes that survived simplifying. A hard start lasts a few seconds and
-    rarely lands on a kept point; without this the map's power shading loses exactly the moments
-    worth seeing, and tops out well short of the ride's own peak.
+    The highest of `values` (one per sample) between each drawn point and the next, over every
+    sample in that stretch — not just the fixes that survived simplifying. A hard start lasts a few
+    seconds and rarely lands on a kept point; without this the map's shading loses exactly the
+    moments worth seeing, and tops out well short of the ride's own peak. None where no sample in
+    the stretch had a value.
     """
     peaks = []
     i = 0
@@ -472,12 +489,12 @@ def _peak_output(samples: list[BmsSample], points: list[BmsSample]) -> list[floa
         end = points[k + 1].at_ms if k + 1 < len(points) else point.at_ms + 1
         while i < len(samples) and samples[i].at_ms < point.at_ms:
             i += 1
-        lowest = 0.0
+        top = None
         while i < len(samples) and samples[i].at_ms < end:
-            lowest = min(lowest, samples[i].watts)
+            if values[i] is not None and (top is None or values[i] > top):
+                top = values[i]
             i += 1
-        # `+ 0.0` normalises negative zero, as in the summary.
-        peaks.append(-lowest + 0.0)
+        peaks.append(top)
     return peaks
 
 

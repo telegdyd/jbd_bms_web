@@ -135,6 +135,17 @@ class TestEffort:
         values = client.get(url).json()["fields"]["rider_w"]
         assert any(v and v > 0 for v in values)
 
+    def test_the_map_can_be_shaded_by_the_rider_s_power(self, client, ride, ground):
+        url = f"/api/v1/sessions/{ride}/track"
+        assert all(p["rider_w"] is None for p in client.get(url).json()["points"])
+
+        put(client, weight_kg=80)
+        drawn = client.get(url).json()["points"]
+        full = client.get(url, params={"detail": "full"}).json()["points"]
+        # Each drawn segment carries the hardest moment of the samples it stands for.
+        assert max(p["rider_w"] or 0 for p in drawn) == max(p["rider_w"] or 0 for p in full)
+        assert max(p["rider_w"] or 0 for p in drawn) > 0
+
     def test_splits_carry_the_rider_s_work(self, client, ride, ground):
         put(client, weight_kg=80)
         splits = client.get(f"/api/v1/sessions/{ride}/splits").json()["splits"]

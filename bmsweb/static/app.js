@@ -1446,6 +1446,9 @@ const COLOUR_BY = {
   /* The most the battery gave out anywhere along each segment, which the track works out from every
    * sample: a short hard effort between two drawn points is still shown where it happened. */
   power: { label: 'Power', field: 'peak_out_w', unit: 'W' },
+  /* The rider's estimated watts, the same way: the most they put in along each segment, smoothed as
+   * the chart draws it. Offered only when the profile and the heights allow an estimate. */
+  rider: { label: 'Your effort', field: 'rider_w', unit: 'W', optional: true },
   /* Scaled from the ride's lowest reading rather than from zero: a heart never goes near zero, and
    * against a zero floor 100 and 145 bpm are two shades of the same green. Offered only when the
    * watch measured something. */
@@ -1490,8 +1493,9 @@ function drawRideMap(parts, track) {
     if (top > 0) {
       for (let i = 0; i < latlngs.length - 1; i++) {
         const value = points[i][field];
-        // A stretch the watch missed is left grey rather than painted as its calmest.
-        const missing = fromLowest && (value === null || value === undefined);
+        // A stretch with nothing measured or estimated — the watch missed it, or there was no
+        // height to work the rider's power from — is left grey rather than painted as its calmest.
+        const missing = value === null || value === undefined;
         L.polyline([latlngs[i], latlngs[i + 1]], {
           color: missing ? css('--muted') : speedColour(((value ?? 0) - bottom) / span),
           weight: 5,
