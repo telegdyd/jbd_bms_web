@@ -16,10 +16,12 @@ from ..companions import AttachStatus
 from ..config import Settings
 from ..db import transaction
 from ..gpx import GpxError
-from ..ingest import IngestStatus, ingest, delete as delete_session, sha256_of
-from ..parse import BmsSample
+from .. import ingest as recordings
+from ..ingest import IngestStatus, TrimError, ingest, delete as delete_session, sha256_of
+from ..parse import BmsSample, SessionKind
 from ..simplify import located, simplify
 from ..splits import splits as compute_splits
+from ..summary import running_km
 from ..terrain import Terrain
 from . import deps
 
@@ -49,6 +51,18 @@ LIST_COLUMNS = """
 class SessionPatch(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=10_000)
+
+
+class TrimRequest(BaseModel):
+    """Epoch milliseconds, both kept. Null at an end keeps it as recorded; both null untrims."""
+
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+#: Roughly how many points the trim editor is sent. Enough that the handles move in steps of a
+#: second or two on a long ride; every fix of a five-hour recording would be a megabyte and more.
+TRIM_POINTS = 6000
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(deps.require_token)])
@@ -153,6 +167,80 @@ def patch_session(
                 [*changes.values(), session_id],
             )
 
+    return dict(_require(connection, session_id))
+
+
+@router.get("/{session_id}/trim")
+def trim_editor(
+    session_id: int,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    settings: Settings = Depends(deps.settings),
+) -> dict:
+    """
+    The whole recording as uploaded, whatever the current trim — so the editor can show what a trim
+    cut off, and move it back out again. Read from the original file rather than the index, which
+    holds only what the trim kept.
+
+    `km` on each point is the distance ridden to there by the summary's own rules, so the editor can
+    say how far the kept stretch goes without working a distance out for itself.
+    """
+    row = _require(connection, session_id)
+    original = recordings.load_original(settings, row["raw_path"])
+    if original is None:
+        raise HTTPException(status.HTTP_410_GONE, "The original file is no longer on disk")
+
+    samples = original.samples
+    if original.kind is SessionKind.EKD01:
+        # The display's own trip counter, as in its summary.
+        km = [s.trip_km for s in samples]
+    else:
+        km = running_km(samples, original.gap_threshold_ms)
+
+    step = max(1, -(-len(samples) // TRIM_POINTS))
+    picked = list(range(0, len(samples), step))
+    # The last sample always, or the end handle could never reach the end of the recording.
+    if samples and picked[-1] != len(samples) - 1:
+        picked.append(len(samples) - 1)
+
+    return {
+        "id": session_id,
+        "kind": original.kind.value,
+        "tz_offset_min": row["tz_offset_min"],
+        "started_at_ms": original.started_at_ms,
+        "ended_at_ms": original.ended_at_ms,
+        "trim_start_ms": row["trim_start_ms"],
+        "trim_end_ms": row["trim_end_ms"],
+        "points": [
+            {
+                "t_ms": samples[i].at_ms,
+                "lat": getattr(samples[i], "latitude", None),
+                "lon": getattr(samples[i], "longitude", None),
+                "speed_kmh": samples[i].speed_kmh,
+                "km": round(km[i], 4),
+            }
+            for i in picked
+        ],
+    }
+
+
+@router.put("/{session_id}/trim", dependencies=[Depends(deps.require_token)])
+def trim_session(
+    session_id: int,
+    body: TrimRequest,
+    connection: sqlite3.Connection = Depends(deps.connection),
+    settings: Settings = Depends(deps.settings),
+) -> dict:
+    """
+    Keep only part of the recording, and rebuild every figure from that part. The original file is
+    not touched, so this can be widened again or undone at any time.
+    """
+    _require(connection, session_id)
+    try:
+        done = recordings.trim(connection, settings, session_id, body.start_ms, body.end_ms)
+    except TrimError as error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
+    if not done:
+        raise HTTPException(status.HTTP_410_GONE, "The original file is no longer on disk")
     return dict(_require(connection, session_id))
 
 

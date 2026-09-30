@@ -154,6 +154,14 @@ SCHEMA = [
 
     ALTER TABLE samples ADD COLUMN pressure_hpa REAL;
     """,
+    # 5 — a trim: the stretch of the recording that counts as the ride, for one left running into
+    # the car. Bounds rather than deleted rows, and applied at parse time, so the original is still
+    # whole on disk, a reparse keeps the trim as it keeps a title, and undoing it is setting both
+    # back to null. Null at either end means that end is where the recording itself stops.
+    """
+    ALTER TABLE sessions ADD COLUMN trim_start_ms INTEGER;
+    ALTER TABLE sessions ADD COLUMN trim_end_ms INTEGER;
+    """,
 ]
 
 

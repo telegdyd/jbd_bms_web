@@ -398,9 +398,56 @@ a.ride-row:hover, a.ride-row.lit { background: var(--surface-2); text-decoration
 .profile .readout { margin-left: auto; display: flex; gap: 16px; font: 13px var(--mono); }
 
 .leaflet-bottom.leaflet-right { bottom: 190px; }
-.overview .leaflet-bottom.leaflet-right { bottom: 0; }
+.overview .leaflet-bottom.leaflet-right, .trim .leaflet-bottom.leaflet-right { bottom: 0; }
 
 .route-tip { font: 12px var(--sans); }
+
+/* ------------------------------------------------------------------ trim */
+
+.map-wrap.trim { height: 460px; }
+
+/* Two range inputs laid over one speed trace. Their tracks are invisible and let clicks through;
+ * only the thumbs — tall bars, like the ends of a video clip — can be grabbed. The trace is inset by
+ * half a thumb on each side, which is where a range input puts its thumb's centre at either end, so
+ * a handle sits exactly over the moment it picks. */
+.trim-range { position: relative; height: 96px; margin: 4px 0 16px; --thumb: 14px; }
+.trim-range svg {
+  position: absolute; top: 0; left: calc(var(--thumb) / 2);
+  width: calc(100% - var(--thumb)); height: 100%;
+  background: var(--surface-2); border-radius: 6px;
+}
+.trim-range .area { fill: color-mix(in srgb, var(--speed) 22%, transparent); stroke: none; }
+.trim-range .line { fill: none; stroke: var(--speed); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.trim-range .cut { fill: var(--bg); opacity: .75; }
+.trim-range .scale {
+  position: absolute; top: 4px; left: calc(var(--thumb) / 2 + 8px); z-index: 1;
+  font: 11px var(--mono); color: var(--muted); pointer-events: none;
+}
+
+.trim-range input[type="range"] {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+  background: none; pointer-events: none; -webkit-appearance: none; appearance: none;
+}
+.trim-range input[type="range"]::-webkit-slider-runnable-track { height: 100%; background: none; }
+.trim-range input[type="range"]::-moz-range-track { height: 100%; background: none; }
+.trim-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; pointer-events: auto; cursor: ew-resize;
+  width: var(--thumb); height: 96px; border-radius: 5px;
+  background: var(--accent); border: 2px solid var(--surface);
+}
+.trim-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto; cursor: ew-resize;
+  width: var(--thumb); height: 92px; border-radius: 5px;
+  background: var(--accent); border: 2px solid var(--surface);
+}
+.trim-range input[type="range"]:focus-visible { outline: none; }
+.trim-range input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
+.trim-range input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+.trim-readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 0 0 16px; }
+.trim-readout dt { color: var(--muted); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+.trim-readout dd { margin: 4px 0 0; font: 15px var(--mono); }
+.notice a { color: inherit; text-decoration: underline; }
 
 /* ------------------------------------------------------------------ charts */
 
@@ -542,6 +589,7 @@ input.offset { width: 72px; text-align: right; font-family: var(--mono); }
   .map-wrap.ride .float.tools, .map-wrap.ride .float.legend { display: none; }
   .leaflet-bottom.leaflet-right { bottom: 0; }
   .map-wrap.overview { height: 340px; }
+  .map-wrap.trim { height: 320px; }
 
   .ride-row { grid-template-columns: 60px minmax(0, 1fr) 76px; gap: 12px; padding: 8px 12px; }
   .ride-row .when { display: none; }

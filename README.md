@@ -103,6 +103,8 @@ mapping or the host firewall. If you see a message about uid 10001 instead, it i
 | `GET /api/v1/sessions/{id}/series` | Charts, min/max downsampled, with dropouts listed. |
 | `GET /api/v1/sessions/{id}/raw.csv` | The original file back, byte for byte. |
 | `PATCH /api/v1/sessions/{id}` | Title and notes. |
+| `GET /api/v1/sessions/{id}/trim` | The whole recording as uploaded, whatever the trim, for the editor. |
+| `PUT /api/v1/sessions/{id}/trim` | Keep only `start_ms`–`end_ms`; both null undoes the trim. |
 | `DELETE /api/v1/sessions/{id}` | Index row goes, original moves to `data/trash/`. |
 | `POST /api/v1/sessions/{id}/companions` | Attach a GPX. Idempotent on the content hash. |
 | `GET /api/v1/sessions/{id}/companions` | What is attached, with its heart rate figures. |
@@ -192,6 +194,17 @@ map for its level. Nothing needs changing here for that.
 estimated from your age as 208 − 0.7 × age, raised to the highest heart rate you have actually
 recorded if that is higher. **Calories** use the Keytel heart rate equations — ±20–30 % for any
 one person.
+
+### Trimming a ride
+
+A recording left running after the ride — into the car, say — can be cut back with **Trim** on the
+ride page. Drag the two handles over the speed trace (a drive shows up as a wall of it) and the map
+redraws as they move: the kept stretch in colour, the rest in grey, with the start and end marked.
+
+Nothing is deleted. The trim is two moments stored on the session, and every figure, split, chart
+and map is rebuilt from the samples between them; the original CSV stays whole on disk, and the
+**CSV** download still gives it back byte for byte. A trim survives a `reparse`, can be widened
+again, and **Whole recording** undoes it.
 
 ### After changing how a figure is computed
 

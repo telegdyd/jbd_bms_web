@@ -160,31 +160,31 @@ def travelled_km(samples: tuple[Sample, ...], gap_threshold_ms: int) -> float:
     a stationary phone wanders by a metre or two per fix, which would otherwise accumulate into
     kilometres over an hour and quietly ruin the Wh/km figure.
     """
+    running = running_km(samples, gap_threshold_ms)
+    return running[-1] if running else 0.0
+
+
+def running_km(samples: tuple[Sample, ...], gap_threshold_ms: int) -> list[float]:
+    """`travelled_km` as it stood after each sample, for anything that needs a distance partway."""
     metres = 0.0
+    totals: list[float] = []
     previous: Sample | None = None
 
     for sample in samples:
-        if not sample.has_location:
-            continue
-        if (sample.accuracy_m or 0.0) > MAX_USABLE_ACCURACY_M:
-            continue
+        if sample.has_location and (sample.accuracy_m or 0.0) <= MAX_USABLE_ACCURACY_M:
+            last = previous
+            # Advanced before the gap check, matching the app: a fix on the far side of a dropout
+            # becomes the new reference point even though the step across the gap is not counted.
+            previous = sample
+            if last is not None and sample.at_ms - last.at_ms <= gap_threshold_ms:
+                step = geo.distance_metres(
+                    last.latitude, last.longitude, sample.latitude, sample.longitude
+                )
+                if step >= MIN_STEP_M:
+                    metres += step
+        totals.append(metres / 1000.0)
 
-        last = previous
-        # Advanced before the gap check, matching the app: a fix on the far side of a dropout
-        # becomes the new reference point even though the step across the gap is not counted.
-        previous = sample
-        if last is None:
-            continue
-        if sample.at_ms - last.at_ms > gap_threshold_ms:
-            continue
-
-        step = geo.distance_metres(
-            last.latitude, last.longitude, sample.latitude, sample.longitude
-        )
-        if step >= MIN_STEP_M:
-            metres += step
-
-    return metres / 1000.0
+    return totals
 
 
 def _round_half_up(value: float) -> int:

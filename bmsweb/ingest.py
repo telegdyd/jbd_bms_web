@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -20,7 +20,7 @@ from pathlib import Path
 from . import SCHEMA_VERSION, companions, polyline
 from .config import Settings
 from .db import transaction
-from .parse import BmsSample, Ekd01Sample, ParsedSession, SessionKind, parse_csv
+from .parse import BmsSample, Ekd01Sample, ParsedSession, SessionKind, gap_threshold_ms, parse_csv
 from .simplify import simplify
 from .summary import Summary, summarise
 
@@ -29,6 +29,10 @@ RIDE_DISTANCE_KM = 0.2
 
 #: `yyyyMMdd-HHmmss_<device-label>.csv`, as both writers name their files.
 FILE_NAME = re.compile(r"^(\d{8}-\d{6})_(.+)\.csv$", re.IGNORECASE)
+
+
+class TrimError(ValueError):
+    """A trim that would leave nothing worth calling a recording. The message is for the user."""
 
 
 class IngestStatus(str, Enum):
@@ -80,25 +84,113 @@ def ingest(
 
 def reparse(connection: sqlite3.Connection, settings: Settings, session_id: int) -> bool:
     """
-    Rebuild one session from its raw CSV, keeping its id, title and notes.
+    Rebuild one session from its raw CSV, keeping its id, title, notes and trim.
 
     This is the whole reason the originals are kept: when a summary rule changes, the history
     changes with it instead of being frozen at whatever the code did the day it was uploaded.
     """
     row = connection.execute(
-        "SELECT sha256, source_name, raw_path, title, notes FROM sessions WHERE id = ?",
+        "SELECT trim_start_ms, trim_end_ms FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    return _rebuild(connection, settings, session_id, row["trim_start_ms"], row["trim_end_ms"])
+
+
+def trim(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    session_id: int,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> bool:
+    """
+    Keep only the samples from `start_ms` to `end_ms`, both inclusive, and rebuild everything
+    from them — for a recording left running after the ride ended. None at either end, or a
+    bound at or beyond the recording's own, keeps that end as recorded; both None undoes a trim.
+
+    Measured against the original, not against the current trim, so a trim can be widened again
+    as well as narrowed. Raises TrimError for a window that would keep fewer than two samples.
+    """
+    row = connection.execute(
+        "SELECT raw_path FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    original = load_original(settings, row["raw_path"])
+    if original is None:
+        return False
+
+    start_ms, end_ms = _normalise_trim(original, start_ms, end_ms)
+    return _rebuild(connection, settings, session_id, start_ms, end_ms, original)
+
+
+def load_original(settings: Settings, raw_path: str) -> ParsedSession | None:
+    """The recording exactly as uploaded, untrimmed; None if its file has gone from disk."""
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = settings.data_dir / path
+    if not path.exists():
+        return None
+    return parse_csv(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def trimmed(session: ParsedSession, start_ms: int | None, end_ms: int | None) -> ParsedSession:
+    """
+    The session as if the recording had only run from `start_ms` to `end_ms`. The dropout
+    threshold is worked out again from what is kept, so the result is exactly what a recording of
+    only that stretch would have parsed to.
+    """
+    if start_ms is None and end_ms is None:
+        return session
+    kept = tuple(
+        s for s in session.samples
+        if (start_ms is None or s.at_ms >= start_ms) and (end_ms is None or s.at_ms <= end_ms)
+    )
+    return replace(session, samples=kept, gap_threshold_ms=gap_threshold_ms([s.at_ms for s in kept]))
+
+
+def _normalise_trim(
+    original: ParsedSession, start_ms: int | None, end_ms: int | None
+) -> tuple[int | None, int | None]:
+    if not original.samples:
+        raise TrimError("This recording has no samples to trim")
+    if start_ms is not None and end_ms is not None and start_ms >= end_ms:
+        raise TrimError("The start has to come before the end")
+
+    # A bound that cuts nothing off is stored as no bound, so an untouched end reads as untrimmed
+    # rather than as a trim that happens to coincide with the recording.
+    if start_ms is not None and start_ms <= original.started_at_ms:
+        start_ms = None
+    if end_ms is not None and end_ms >= original.ended_at_ms:
+        end_ms = None
+
+    if len(trimmed(original, start_ms, end_ms).samples) < 2:
+        raise TrimError("That would keep less than two samples of the recording")
+    return start_ms, end_ms
+
+
+def _rebuild(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    session_id: int,
+    trim_start_ms: int | None,
+    trim_end_ms: int | None,
+    original: ParsedSession | None = None,
+) -> bool:
+    row = connection.execute(
+        "SELECT sha256, source_name, raw_path, title, notes, uploaded_at_ms FROM sessions WHERE id = ?",
         (session_id,),
     ).fetchone()
     if row is None:
         return False
 
-    path = Path(row["raw_path"])
-    if not path.is_absolute():
-        path = settings.data_dir / path
-    if not path.exists():
+    if original is None:
+        original = load_original(settings, row["raw_path"])
+    if original is None:
         return False
 
-    session = parse_csv(path.read_text(encoding="utf-8", errors="replace"))
+    session = trimmed(original, trim_start_ms, trim_end_ms)
     started_at_ms, tz_offset_min = _start_of(session, row["source_name"])
 
     # Deleting the session row cascades to its companions, so they are rebuilt from their own
@@ -121,6 +213,11 @@ def reparse(connection: sqlite3.Connection, settings: Settings, session_id: int)
             session_id=session_id,
             title=row["title"],
             notes=row["notes"],
+            trim_start_ms=trim_start_ms,
+            trim_end_ms=trim_end_ms,
+            # Kept rather than restamped: the sidebar's "last upload" is about the phone, and a
+            # trim or a reparse is not the phone delivering anything.
+            uploaded_at_ms=row["uploaded_at_ms"],
         )
         companions.restore(connection, settings, session_id, attached)
     return True
@@ -188,6 +285,9 @@ def _insert(
     session_id: int | None = None,
     title: str | None = None,
     notes: str | None = None,
+    trim_start_ms: int | None = None,
+    trim_end_ms: int | None = None,
+    uploaded_at_ms: int | None = None,
 ) -> int:
     s: Summary = summarise(session)
     now_ms = int(time.time() * 1000)
@@ -239,7 +339,9 @@ def _insert(
         "polyline": polyline.encode_samples(track) if track else None,
         "title": title,
         "notes": notes,
-        "uploaded_at_ms": now_ms,
+        "trim_start_ms": trim_start_ms,
+        "trim_end_ms": trim_end_ms,
+        "uploaded_at_ms": uploaded_at_ms if uploaded_at_ms is not None else now_ms,
         "parsed_at_ms": now_ms,
         "schema_version": SCHEMA_VERSION,
     }

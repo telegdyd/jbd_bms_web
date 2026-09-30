@@ -37,6 +37,7 @@ const ICONS = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 16.5v.5"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   warn: '<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4"/><path d="M12 17v.5"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9"/><path d="M14.5 14.5L20 20"/><path d="M8.1 8.1L12 12"/>',
 };
 
 function icon(name) {
@@ -137,6 +138,11 @@ const fmt = {
   clock(ms, offsetMin) {
     const shifted = new Date(ms + (offsetMin ?? 0) * 60000);
     return `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+  },
+  /* To the second, for picking one moment out of a ride. */
+  clockSeconds(ms, offsetMin) {
+    const shifted = new Date(ms + (offsetMin ?? 0) * 60000);
+    return `${fmt.clock(ms, offsetMin)}:${pad(shifted.getUTCSeconds())}`;
   },
   day(iso) {
     const date = new Date(iso + 'T00:00:00Z');
@@ -844,6 +850,7 @@ async function detailView(root, id) {
           },
         }, icon('pencil'))),
       el('div', { class: 'controls' },
+        el('a', { class: 'pill', href: `#/session/${id}/trim` }, icon('scissors'), 'Trim'),
         el('a', { class: 'pill', href: `${API}/sessions/${id}/raw.csv` }, icon('download'), 'CSV'),
         el('button', { class: 'pill danger', type: 'button', onclick: remove }, icon('trash'), 'Delete'))),
     el('div', { class: 'meta-line' },
@@ -872,6 +879,15 @@ async function detailView(root, id) {
     page.append(mapParts.wrap);
   } else {
     page.append(summaryTiles(session, isEkd01));
+  }
+
+  if (session.trim_start_ms !== null || session.trim_end_ms !== null) {
+    page.append(el('div', { class: 'notice' }, icon('scissors'),
+      el('span', {}, 'Trimmed: only ',
+        el('b', {}, `${fmt.clock(session.started_at_ms, session.tz_offset_min)} → ` +
+          fmt.clock(session.ended_at_ms, session.tz_offset_min)),
+        ' of the recording counts. The original is kept whole. ',
+        el('a', { href: `#/session/${id}/trim` }, 'Change the trim'))));
   }
 
   if (session.gap_count) {
@@ -953,6 +969,191 @@ async function detailView(root, id) {
     if (!onMap) page.querySelector('.tiles')?.append(
       tile('Avg HR', Math.round(best.hr_avg), 'bpm'), tile('Max HR', best.hr_max, 'bpm'));
   }
+}
+
+/* ------------------------------------------------------------------- trim */
+
+/*
+ * Cutting a recording down to the part that was the ride — for one left running into the car. Two
+ * handles over the speed trace, which is where a drive home shows up as a wall, and the route on
+ * the map redrawn as they move, with the kept stretch in colour and the rest in grey.
+ *
+ * The editor always works on the whole recording, not the current trim, so a cut can be moved back
+ * out as easily as in. Saving sends the two moments; the server rebuilds every figure from them.
+ */
+async function trimView(root, id) {
+  const [session, body] = await Promise.all([get(`/sessions/${id}`), get(`/sessions/${id}/trim`)]);
+  const points = body.points;
+  const offset = body.tz_offset_min;
+  const first = body.started_at_ms;
+  const last = body.ended_at_ms;
+  const times = points.map((p) => p.t_ms);
+  const back = `#/session/${id}`;
+
+  const page = el('div', { class: 'stack' });
+  root.append(page);
+  page.append(el('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+    el('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
+      el('a', { href: session.is_ride ? '#/rides' : '#/sessions' }, session.is_ride ? 'Rides' : 'Sessions'),
+      ' / ', el('a', { href: back }, session.title || defaultName(session)), ' / Trim'),
+    el('h1', {}, 'Trim'),
+    el('p', { class: 'sub' },
+      'Drag the handles to where the ride really started and ended. Everything outside them is ' +
+      'left out of the figures, the charts and the map. The original recording is kept whole, so ' +
+      'this can be changed or undone later.')));
+
+  if (points.length < 2) {
+    page.append(el('div', { class: 'empty' }, 'This recording is too short to trim.'));
+    return;
+  }
+
+  // -- the map, when there is a route to put on one
+  const located = points.filter((p) => p.lat !== null && p.lon !== null);
+  const locatedTimes = located.map((p) => p.t_ms);
+  const onMap = located.length >= 2;
+  let keptLine = null, startDot = null, endDot = null;
+  if (onMap) {
+    const host = el('div', { class: 'map' });
+    const wrap = el('section', { class: 'map-wrap trim', 'aria-label': 'Route' }, host);
+    page.append(wrap);
+    const latlngs = located.map((p) => [p.lat, p.lon]);
+    const { map, tiles } = baseMap(host, (m) => m.fitBounds(latlngs, { padding: [32, 32] }));
+    wrap.append(el('div', { class: 'float tools right' }, tilesToggle(map, tiles)));
+
+    // The whole recording underneath in grey, so what a cut removes stays in sight. Cased in the
+    // page colour, or grey on the dimmed dark-theme tiles all but disappears.
+    L.polyline(latlngs, { color: css('--bg'), weight: 8, opacity: 0.8 }).addTo(map);
+    L.polyline(latlngs, { color: css('--muted'), weight: 4, opacity: 0.9 }).addTo(map);
+    keptLine = L.polyline([], { color: css('--accent'), weight: 5, opacity: 0.95 }).addTo(map);
+    const dot = (fill) => L.circleMarker(latlngs[0], {
+      radius: 8, color: '#fff', weight: 2.5, fillColor: fill, fillOpacity: 1,
+    }).addTo(map);
+    startDot = dot('#22c55e');
+    endDot = dot('#ef4444');
+  }
+
+  // -- the handles, over the speed trace
+  const known = (v) => v !== null && v !== undefined;
+  const top = Math.max(1, ...points.map((p) => p.speed_kmh).filter(known));
+  const x = (ms) => ((ms - first) / Math.max(last - first, 1)) * 1000;
+
+  let area = '', line = '';
+  points.forEach((p, i) => {
+    if (!known(p.speed_kmh)) return;
+    const px = x(p.t_ms).toFixed(1);
+    const py = (100 - (p.speed_kmh / top) * 92).toFixed(1);
+    const starts = i === 0 || !known(points[i - 1].speed_kmh);
+    const ends = i === points.length - 1 || !known(points[i + 1].speed_kmh);
+    line += `${starts ? 'M' : 'L'}${px} ${py}`;
+    // Closed down to the baseline at each break, so a stretch with no speed is a gap in the fill too.
+    area += `${starts ? `M${px} 100L` : 'L'}${px} ${py}${ends ? `L${px} 100Z` : ''}`;
+  });
+
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 1000 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML =
+    `<path class="area" d="${area}"/><path class="line" d="${line}"/>` +
+    '<rect class="cut" y="0" height="100"/><rect class="cut" y="0" height="100"/>';
+  const [cutStart, cutEnd] = svg.querySelectorAll('.cut');
+
+  const handle = (label, value) => {
+    const input = el('input', { type: 'range', min: first, max: last, step: 1000, 'aria-label': label });
+    input.value = value;
+    return input;
+  };
+  const startInput = handle('Ride start', body.trim_start_ms ?? first);
+  const endInput = handle('Ride end', body.trim_end_ms ?? last);
+
+  const readout = { start: el('dd', {}), end: el('dd', {}), kept: el('dd', {}), distance: el('dd', {}) };
+  const status = el('span', { class: 'saving' });
+  const save = el('button', { class: 'pill on', type: 'button' }, icon('check'), 'Save trim');
+  const whole = el('button', { class: 'pill', type: 'button' }, 'Whole recording');
+
+  page.append(el('section', { class: 'card' },
+    el('div', { class: 'section-head' }, el('h2', {}, 'Speed through the recording'),
+      el('span', { class: 'hint' },
+        `${fmt.clockSeconds(first, offset)} → ${fmt.clockSeconds(last, offset)} as recorded`)),
+    el('div', { class: 'trim-range' },
+      el('span', { class: 'scale' }, `${Math.round(top)} km/h`), svg, startInput, endInput),
+    el('dl', { class: 'trim-readout' },
+      el('div', {}, el('dt', {}, 'Start'), readout.start),
+      el('div', {}, el('dt', {}, 'End'), readout.end),
+      el('div', {}, el('dt', {}, 'Kept'), readout.kept),
+      onMap || session.kind === 'ekd01'
+        ? el('div', {}, el('dt', {}, 'Distance'), readout.distance) : null),
+    el('div', { class: 'controls' }, save, whole,
+      el('a', { class: 'pill', href: back }, 'Cancel'), status)));
+
+  /* Each handle snapped to the nearest sample actually sent, so the moment shown is one that
+   * exists in the recording — and is exactly the one that gets saved. */
+  function picked() {
+    return [nearest(times, Number(startInput.value)), nearest(times, Number(endInput.value))];
+  }
+
+  const speedAt = (i) => (known(points[i].speed_kmh) ? ` · ${points[i].speed_kmh.toFixed(0)} km/h` : '');
+
+  function update(moved) {
+    // The handles may not pass each other: the one being dragged stops short of the other.
+    const apart = Math.min(10000, (last - first) / 2);
+    if (Number(startInput.value) > Number(endInput.value) - apart) {
+      if (moved === endInput) endInput.value = Number(startInput.value) + apart;
+      else startInput.value = Number(endInput.value) - apart;
+    }
+    // The handle touched last sits on top, so two pushed together can both be pulled apart again.
+    startInput.style.zIndex = moved === startInput ? 3 : 2;
+    endInput.style.zIndex = moved === startInput ? 2 : 3;
+
+    const [a, b] = picked();
+    const t0 = times[a], t1 = times[b];
+    cutStart.setAttribute('x', 0);
+    cutStart.setAttribute('width', Math.max(0, x(t0)));
+    cutEnd.setAttribute('x', x(t1));
+    cutEnd.setAttribute('width', Math.max(0, 1000 - x(t1)));
+
+    readout.start.textContent = fmt.clockSeconds(t0, offset) + speedAt(a);
+    readout.end.textContent = fmt.clockSeconds(t1, offset) + speedAt(b);
+    readout.kept.textContent = a === 0 && b === times.length - 1
+      ? `${fmt.duration((t1 - t0) / 1000)} · all of it`
+      : `${fmt.duration((t1 - t0) / 1000)} of ${fmt.duration((last - first) / 1000)}`;
+    readout.distance.textContent =
+      `${fmt.km(points[b].km - points[a].km)} of ${fmt.km(points[points.length - 1].km)} km`;
+
+    if (onMap) {
+      const i0 = nearest(locatedTimes, t0);
+      const i1 = nearest(locatedTimes, t1);
+      keptLine.setLatLngs(located.slice(i0, i1 + 1).map((p) => [p.lat, p.lon]));
+      startDot.setLatLng([located[i0].lat, located[i0].lon]);
+      endDot.setLatLng([located[i1].lat, located[i1].lon]);
+    }
+    status.textContent = '';
+  }
+
+  startInput.addEventListener('input', () => update(startInput));
+  endInput.addEventListener('input', () => update(endInput));
+  whole.addEventListener('click', () => {
+    startInput.value = first;
+    endInput.value = last;
+    update(null);
+  });
+  save.addEventListener('click', async () => {
+    const [a, b] = picked();
+    save.disabled = true;
+    status.textContent = 'saving… every figure is being worked out again';
+    try {
+      await put(`/sessions/${id}/trim`, {
+        start_ms: a === 0 ? null : times[a],
+        end_ms: b === times.length - 1 ? null : times[b],
+      });
+      location.hash = back;
+    } catch (error) {
+      status.textContent = String(error.message || error);
+      save.disabled = false;
+    }
+  });
+
+  update(null);
 }
 
 /* The ride's own figures, as they sit over its map. The headline and six beside it are what gets
@@ -1714,6 +1915,7 @@ const ROUTES = [
     blurb: 'Everything recorded, including bench and solar sessions with no route.',
   })],
   [/^\/session\/(\d+)$/, (root, id) => detailView(root, id)],
+  [/^\/session\/(\d+)\/trim$/, (root, id) => trimView(root, id)],
   [/^\/profile$/, (root) => profileView(root)],
 ];
 
